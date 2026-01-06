@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Gift, Heart, Sparkles, Eye, Flame, Star } from 'lucide-react';
+import { db } from './firebase';
+import { ref, set, onValue, remove } from 'firebase/database';
 import './SecretSanta.css';
 
 const generateDerangement = (participants) => {
@@ -103,114 +105,123 @@ export default function SecretSanta() {
   const [adminCodeInput, setAdminCodeInput] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminPrompt, setShowAdminPrompt] = useState(false);
+  const [userPins, setUserPins] = useState({});
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState(null);
+  const [pinError, setPinError] = useState('');
+  
+  const snowflakes = React.useMemo(() => {
+    return Array.from({ length: 30 }).map((_, i) => ({
+      id: i,
+      delay: Math.random() * 10,
+      duration: 10 + Math.random() * 10,
+      left: Math.random() * 100
+    }));
+  }, []);
   
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const phaseData = await window.storage.get('santa-phase');
-        const participantsData = await window.storage.get('santa-participants');
-        const assignmentsData = await window.storage.get('santa-assignments');
-        const reactionsData = await window.storage.get('santa-reactions', true);
-        const revealData = await window.storage.get('santa-reveal-state', true);
-        const adminCodeData = await window.storage.get('santa-admin-code');
-        
-        if (phaseData) setPhase(JSON.parse(phaseData.value));
-        if (participantsData) setParticipants(JSON.parse(participantsData.value));
-        if (assignmentsData) setAssignments(JSON.parse(assignmentsData.value));
-        if (reactionsData) setReactions(JSON.parse(reactionsData.value));
-        if (adminCodeData) setAdminCode(JSON.parse(adminCodeData.value));
-        if (revealData) {
-          const state = JSON.parse(revealData.value);
-          setRevealIndex(state.index || 0);
-          setRevealStage(state.stage || 'name');
-          setShowMessage(state.showMessage || false);
-        }
-      } catch (error) {
-        console.log('Starting fresh session');
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('reset') === 'true') {
+      const confirmReset = window.confirm('Emergency reset: Delete all data and start fresh?');
+      if (confirmReset) {
+        remove(ref(db, '/')).then(() => {
+          window.location.href = window.location.pathname;
+        });
+        return;
       }
+    }
+    
+    const phaseRef = ref(db, 'santa-phase');
+    const participantsRef = ref(db, 'santa-participants');
+    const assignmentsRef = ref(db, 'santa-assignments');
+    const reactionsRef = ref(db, 'santa-reactions');
+    const adminCodeRef = ref(db, 'santa-admin-code');
+    const revealStateRef = ref(db, 'santa-reveal-state');
+    const userPinsRef = ref(db, 'santa-user-pins');
+    
+    const unsubPhase = onValue(phaseRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) setPhase(val);
+    });
+    
+    const unsubParticipants = onValue(participantsRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) setParticipants(val);
+    });
+    
+    const unsubAssignments = onValue(assignmentsRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) setAssignments(val);
+    });
+    
+    const unsubReactions = onValue(reactionsRef, (snapshot) => {
+      const val = snapshot.val();
+      setReactions(val || {});
+    });
+    
+    const unsubAdminCode = onValue(adminCodeRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) setAdminCode(val);
+    });
+    
+    const unsubRevealState = onValue(revealStateRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) {
+        setRevealIndex(val.index || 0);
+        setRevealStage(val.stage || 'name');
+        setShowMessage(val.showMessage || false);
+      }
+    });
+    
+    const unsubUserPins = onValue(userPinsRef, (snapshot) => {
+      const val = snapshot.val();
+      setUserPins(val || {});
+    });
+    
+    return () => {
+      unsubPhase();
+      unsubParticipants();
+      unsubAssignments();
+      unsubReactions();
+      unsubAdminCode();
+      unsubRevealState();
+      unsubUserPins();
     };
-    loadData();
   }, []);
   
   useEffect(() => {
     if (phase === 'reveal' && revealStage === 'name' && !showMessage) {
       const timer = setTimeout(() => {
-        setShowMessage(true);
         saveRevealState(revealIndex, 'message', true);
       }, 700);
       return () => clearTimeout(timer);
     }
   }, [phase, revealStage, showMessage, revealIndex]);
   
-  useEffect(() => {
-    if (phase !== 'reveal') return;
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        const revealData = await window.storage.get('santa-reveal-state', true);
-        if (revealData) {
-          const state = JSON.parse(revealData.value);
-          setRevealIndex(state.index || 0);
-          setRevealStage(state.stage || 'name');
-          setShowMessage(state.showMessage || false);
-        }
-      } catch (error) {
-      }
-    }, 1000);
-    
-    return () => clearInterval(pollInterval);
-  }, [phase]);
-  
-  useEffect(() => {
-    if (phase !== 'reveal') return;
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        const reactionsData = await window.storage.get('santa-reactions', true);
-        if (reactionsData) {
-          setReactions(JSON.parse(reactionsData.value));
-        }
-      } catch (error) {
-      }
-    }, 500);
-    
-    return () => clearInterval(pollInterval);
-  }, [phase]);
-  
-  // Save phase
-  const savePhase = async (newPhase) => {
-    setPhase(newPhase);
-    await window.storage.set('santa-phase', JSON.stringify(newPhase));
+  // Save functions
+  const savePhase = (newPhase) => {
+    set(ref(db, 'santa-phase'), newPhase);
   };
   
-  // Save participants
-  const saveParticipants = async (newParticipants) => {
-    setParticipants(newParticipants);
-    await window.storage.set('santa-participants', JSON.stringify(newParticipants));
+  const saveParticipants = (newParticipants) => {
+    set(ref(db, 'santa-participants'), newParticipants);
   };
   
-  // Save assignments
-  const saveAssignments = async (newAssignments) => {
-    setAssignments(newAssignments);
-    await window.storage.set('santa-assignments', JSON.stringify(newAssignments));
+  const saveAssignments = (newAssignments) => {
+    set(ref(db, 'santa-assignments'), newAssignments);
   };
   
-  // Save reactions (shared)
-  const saveReactions = async (newReactions) => {
-    setReactions(newReactions);
-    await window.storage.set('santa-reactions', JSON.stringify(newReactions), true);
+  const saveReactions = (newReactions) => {
+    set(ref(db, 'santa-reactions'), newReactions);
   };
   
-  // Save reveal state (shared)
-  const saveRevealState = useCallback(async (index, stage, messageShown = false) => {
-    setRevealIndex(index);
-    setRevealStage(stage);
-    setShowMessage(messageShown);
-    await window.storage.set('santa-reveal-state', JSON.stringify({ 
+  const saveRevealState = useCallback((index, stage, messageShown = false) => {
+    set(ref(db, 'santa-reveal-state'), { 
       index, 
       stage,
       showMessage: messageShown 
-    }), true);
+    });
   }, []);
   
   // Add participant
@@ -245,7 +256,7 @@ export default function SecretSanta() {
     }
     
     // Save admin code
-    await window.storage.set('santa-admin-code', JSON.stringify(adminCode));
+    set(ref(db, 'santa-admin-code'), adminCode);
     
     // Shuffle reveal order
     const shuffled = [...derangement].sort(() => Math.random() - 0.5);
@@ -254,13 +265,43 @@ export default function SecretSanta() {
     setIsAdmin(true);
   };
   
-  // Select user to write message
-  const selectUser = (userId) => {
-    setCurrentUser(userId);
+  const handleUserSelect = (userId) => {
+    setSelectedUserId(userId);
+    setPinInput('');
+    setPinError('');
+    setShowPinPrompt(true);
+  };
+  
+  const verifyPin = () => {
+    const existingPin = userPins[selectedUserId];
+    
+    if (!existingPin) {
+      // First time - set new PIN
+      if (pinInput.length < 4) {
+        setPinError('PIN must be at least 4 characters');
+        return;
+      }
+      // Save new PIN
+      set(ref(db, `santa-user-pins/${selectedUserId}`), pinInput);
+      setCurrentUser(selectedUserId);
+      setShowPinPrompt(false);
+      setPinInput('');
+    } else {
+      // Verify existing PIN
+      if (pinInput === existingPin) {
+        setCurrentUser(selectedUserId);
+        setShowPinPrompt(false);
+        setPinInput('');
+        setPinError('');
+      } else {
+        setPinError('Incorrect PIN');
+        setPinInput('');
+      }
+    }
   };
   
   // Save message
-  const saveMessage = async (assignmentId, message) => {
+  const saveMessage = (assignmentId, message) => {
     const updated = assignments.map(a =>
       a.assignmentId === assignmentId ? { ...a, message } : a
     );
@@ -308,8 +349,8 @@ export default function SecretSanta() {
     setTimeout(() => setShowConfetti(false), 3000);
   };
   
-  // Toggle reaction
-  const addReaction = async (assignmentId, emoji) => {
+  // Add reaction
+  const addReaction = (assignmentId, emoji) => {
     const key = `${assignmentId}-${emoji}`;
     const newReactions = { ...reactions };
     
@@ -326,17 +367,17 @@ export default function SecretSanta() {
     return reactions[key] || 0;
   };
   
-  // Reset everything
   const resetAll = async () => {
     if (!window.confirm('Reset everything? This cannot be undone.')) return;
     
     try {
-      await window.storage.delete('santa-phase');
-      await window.storage.delete('santa-participants');
-      await window.storage.delete('santa-assignments');
-      await window.storage.delete('santa-reactions', true);
-      await window.storage.delete('santa-reveal-state', true);
-      await window.storage.delete('santa-admin-code');
+      await remove(ref(db, 'santa-phase'));
+      await remove(ref(db, 'santa-participants'));
+      await remove(ref(db, 'santa-assignments'));
+      await remove(ref(db, 'santa-reactions'));
+      await remove(ref(db, 'santa-reveal-state'));
+      await remove(ref(db, 'santa-admin-code'));
+      await remove(ref(db, 'santa-user-pins'));
       
       setPhase('setup');
       setParticipants([]);
@@ -348,6 +389,7 @@ export default function SecretSanta() {
       setReactions({});
       setAdminCode('');
       setIsAdmin(false);
+      setUserPins({});
     } catch (error) {
       console.error('Reset failed:', error);
     }
@@ -358,16 +400,38 @@ export default function SecretSanta() {
   
   return (
     <div className="app-container">
-      {Array.from({ length: 30 }).map((_, i) => (
+      {snowflakes.map((flake) => (
         <Snowflake
-          key={i}
-          delay={Math.random() * 10}
-          duration={10 + Math.random() * 10}
-          left={Math.random() * 100}
+          key={flake.id}
+          delay={flake.delay}
+          duration={flake.duration}
+          left={flake.left}
         />
       ))}
       
       <div className="content-wrapper">
+        <div style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 9999 }}>
+          <button 
+            onClick={() => {
+              if (window.confirm('Start fresh session? This will delete all data.')) {
+                remove(ref(db, '/')).then(() => window.location.reload());
+              }
+            }}
+            style={{
+              background: 'rgba(139, 46, 46, 0.9)',
+              color: 'white',
+              border: 'none',
+              padding: '0.5rem 1rem',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 600
+            }}
+          >
+            🔄 Dev Reset
+          </button>
+        </div>
+        
         <div className="header fade-in-up">
           <div className="header-ornaments">
             <span className="ornament ornament-red"></span>
@@ -494,7 +558,7 @@ export default function SecretSanta() {
                   {participants.map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => selectUser(p.id)}
+                      onClick={() => handleUserSelect(p.id)}
                       className="participant-btn"
                     >
                       🎁 {p.name}
@@ -642,6 +706,7 @@ export default function SecretSanta() {
               )}
             </div>
             
+            {/* Admin Controls */}
             {isAdmin && (
               <div className="card controls-card">
                 <div className="controls-buttons">
@@ -726,6 +791,71 @@ export default function SecretSanta() {
                 onClick={() => {
                   setShowAdminPrompt(false);
                   setAdminCodeInput('');
+                }}
+                className="btn btn-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showPinPrompt && selectedUserId && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div className="card" style={{ maxWidth: '400px', padding: '2rem' }}>
+            <h3 className="christmas-font" style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0a4d3c', textAlign: 'center' }}>
+              {!userPins[selectedUserId] ? 'Create Your PIN' : 'Enter Your PIN'}
+            </h3>
+            <p style={{ marginBottom: '1.5rem', color: '#374151', textAlign: 'center' }}>
+              {!userPins[selectedUserId] 
+                ? 'Set a PIN to protect your message (minimum 4 characters)'
+                : 'Enter your PIN to access your message'
+              }
+            </p>
+            <input
+              type="password"
+              value={pinInput}
+              onChange={(e) => {
+                setPinInput(e.target.value);
+                setPinError('');
+              }}
+              onKeyPress={(e) => e.key === 'Enter' && verifyPin()}
+              placeholder={!userPins[selectedUserId] ? "Create PIN (min 4 chars)" : "Enter PIN"}
+              className="input"
+              style={{ marginBottom: '0.5rem' }}
+              autoFocus
+            />
+            {pinError && (
+              <p style={{ color: '#dc2626', fontSize: '0.875rem', marginBottom: '1rem', textAlign: 'center' }}>
+                {pinError}
+              </p>
+            )}
+            <div className="flex gap-3" style={{ marginTop: '1rem' }}>
+              <button
+                onClick={verifyPin}
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+              >
+                {!userPins[selectedUserId] ? 'Set PIN' : 'Verify'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowPinPrompt(false);
+                  setPinInput('');
+                  setPinError('');
+                  setSelectedUserId(null);
                 }}
                 className="btn btn-secondary"
               >
