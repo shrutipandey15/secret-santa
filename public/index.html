@@ -39,5 +39,45 @@
       To begin the development, run `npm start` or `yarn start`.
       To create a production bundle, use `npm run build` or `yarn build`.
     -->
+      <script>
+  // Storage API polyfill for local development
+  if (!window.storage) {
+    const localStorage = window.localStorage;
+    window.storage = {
+      async get(key, shared = false) {
+        try {
+          const value = localStorage.getItem(key);
+          return value ? { key, value, shared } : null;
+        } catch {
+          return null;
+        }
+      },
+      async set(key, value, shared = false) {
+        try {
+          localStorage.setItem(key, value);
+          return { key, value, shared };
+        } catch {
+          return null;
+        }
+      },
+      async delete(key, shared = false) {
+        try {
+          localStorage.removeItem(key);
+          return { key, deleted: true, shared };
+        } catch {
+          return null;
+        }
+      },
+      async list(prefix = '', shared = false) {
+        try {
+          const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
+          return { keys, prefix, shared };
+        } catch {
+          return null;
+        }
+      }
+    };
+  }
+</script>
   </body>
 </html>
