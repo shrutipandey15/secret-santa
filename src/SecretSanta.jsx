@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Gift, Heart, Sparkles, Eye, Flame, Star } from 'lucide-react';
 import { db } from './firebase';
 import { ref, set, onValue, remove } from 'firebase/database';
@@ -111,6 +111,9 @@ export default function SecretSanta() {
   const [selectedUserId, setSelectedUserId] = useState(null);
   const [pinError, setPinError] = useState('');
   
+  const updateTimeoutRef = useRef(null);
+  const pendingUpdatesRef = useRef({});
+  
   const snowflakes = React.useMemo(() => {
     return Array.from({ length: 30 }).map((_, i) => ({
       id: i,
@@ -132,6 +135,38 @@ export default function SecretSanta() {
       }
     }
     
+    const applyBatchedUpdates = () => {
+      const updates = pendingUpdatesRef.current;
+      
+      if (updates.phase !== undefined) setPhase(updates.phase);
+      if (updates.participants !== undefined) setParticipants(updates.participants);
+      if (updates.assignments !== undefined) setAssignments(updates.assignments);
+      if (updates.reactions !== undefined) setReactions(updates.reactions);
+      if (updates.adminCode !== undefined) setAdminCode(updates.adminCode);
+      if (updates.revealState !== undefined) {
+        const val = updates.revealState;
+        setRevealIndex(val.index || 0);
+        setRevealStage(val.stage || 'name');
+        setShowMessage(val.showMessage || false);
+      }
+      if (updates.userPins !== undefined) setUserPins(updates.userPins);
+      
+      pendingUpdatesRef.current = {};
+    };
+    
+    const scheduleUpdate = (key, value) => {
+      pendingUpdatesRef.current[key] = value;
+      
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current);
+      }
+      
+      updateTimeoutRef.current = setTimeout(() => {
+        applyBatchedUpdates();
+        updateTimeoutRef.current = null;
+      }, 16);
+    };
+    
     const phaseRef = ref(db, 'santa-phase');
     const participantsRef = ref(db, 'santa-participants');
     const assignmentsRef = ref(db, 'santa-assignments');
@@ -142,44 +177,43 @@ export default function SecretSanta() {
     
     const unsubPhase = onValue(phaseRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) setPhase(val);
+      if (val) scheduleUpdate('phase', val);
     });
     
     const unsubParticipants = onValue(participantsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) setParticipants(val);
+      if (val) scheduleUpdate('participants', val);
     });
     
     const unsubAssignments = onValue(assignmentsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) setAssignments(val);
+      if (val) scheduleUpdate('assignments', val);
     });
     
     const unsubReactions = onValue(reactionsRef, (snapshot) => {
       const val = snapshot.val();
-      setReactions(val || {});
+      scheduleUpdate('reactions', val || {});
     });
     
     const unsubAdminCode = onValue(adminCodeRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) setAdminCode(val);
+      if (val) scheduleUpdate('adminCode', val);
     });
     
     const unsubRevealState = onValue(revealStateRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) {
-        setRevealIndex(val.index || 0);
-        setRevealStage(val.stage || 'name');
-        setShowMessage(val.showMessage || false);
-      }
+      if (val) scheduleUpdate('revealState', val);
     });
     
     const unsubUserPins = onValue(userPinsRef, (snapshot) => {
       const val = snapshot.val();
-      setUserPins(val || {});
+      scheduleUpdate('userPins', val || {});
     });
     
     return () => {
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current);
+      }
       unsubPhase();
       unsubParticipants();
       unsubAssignments();
@@ -199,7 +233,6 @@ export default function SecretSanta() {
     }
   }, [phase, revealStage, showMessage, revealIndex]);
   
-  // Save functions
   const savePhase = (newPhase) => {
     set(ref(db, 'santa-phase'), newPhase);
   };
@@ -409,28 +442,19 @@ export default function SecretSanta() {
         />
       ))}
       
+      <button 
+        onClick={() => {
+          if (window.confirm('Start fresh session? This will delete all data.')) {
+            remove(ref(db, '/')).then(() => window.location.reload());
+          }
+        }}
+        className="dev-reset-btn"
+        title="Reset all data and start fresh"
+      >
+        Dev Reset
+      </button>
+      
       <div className="content-wrapper">
-        <div style={{ position: 'fixed', top: '1rem', right: '1rem', zIndex: 9999 }}>
-          <button 
-            onClick={() => {
-              if (window.confirm('Start fresh session? This will delete all data.')) {
-                remove(ref(db, '/')).then(() => window.location.reload());
-              }
-            }}
-            style={{
-              background: 'rgba(139, 46, 46, 0.9)',
-              color: 'white',
-              border: 'none',
-              padding: '0.5rem 1rem',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontSize: '0.875rem',
-              fontWeight: 600
-            }}
-          >
-            🔄 Dev Reset
-          </button>
-        </div>
         
         <div className="header fade-in-up">
           <div className="header-ornaments">
@@ -650,7 +674,7 @@ export default function SecretSanta() {
                   {revealStage !== 'author' && (
                     <div className="reactions-container scale-in">
                       <p className="reactions-prompt">
-                        React if this made you smile 👇
+                        React if this made you smile
                       </p>
                       <div className="reactions-grid">
                         {REACTIONS.map(({ id, label }) => (
@@ -682,7 +706,7 @@ export default function SecretSanta() {
                       
                       <div className="reactions-container">
                         <p className="reactions-prompt">
-                          Final reactions 👇
+                          Final reactions
                         </p>
                         <div className="reactions-grid">
                           {REACTIONS.map(({ id, label }) => (
