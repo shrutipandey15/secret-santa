@@ -111,6 +111,8 @@ export default function SecretSanta() {
   const [pinInput, setPinInput] = useState('');
   const [selectedUserId, setSelectedUserId] = useState(null);
   const [pinError, setPinError] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
+  const [showEditConfirmation, setShowEditConfirmation] = useState(false);
   
   const updateTimeoutRef = useRef(null);
   const pendingUpdatesRef = useRef({});
@@ -233,6 +235,31 @@ export default function SecretSanta() {
       return () => clearTimeout(timer);
     }
   }, [phase, revealStage, showMessage, revealIndex]);
+  
+  useEffect(() => {
+    if (phase !== 'reveal' || !isAdmin) return;
+    
+    const handleKeyPress = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+      
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        previousMessage();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (revealStage === 'message') {
+          revealAuthor();
+        } else if (revealStage === 'author') {
+          nextMessage();
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [phase, isAdmin, revealIndex, revealStage, assignments.length]);
   
   const savePhase = (newPhase) => {
     set(ref(db, 'santa-phase'), newPhase);
@@ -388,6 +415,13 @@ export default function SecretSanta() {
     } else {
       savePhase('finale');
       setShowConfetti(true);
+    }
+  };
+  
+  const previousMessage = () => {
+    if (revealIndex > 0) {
+      saveRevealState(revealIndex - 1, 'author', true);
+      setShowConfetti(false);
     }
   };
   
@@ -583,7 +617,7 @@ export default function SecretSanta() {
             {isAdmin && (
               <div className="card fade-in-up" style={{ marginBottom: '2rem' }}>
                 <h2 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '1.5rem', color: '#0a4d3c' }}>
-                  📊 Writing Progress
+                  Writing Progress
                 </h2>
                 
                 <div style={{ 
@@ -679,15 +713,40 @@ export default function SecretSanta() {
                 </div>
                 
                 <div>
-                  {participants.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => handleUserSelect(p.id)}
-                      className="participant-btn"
-                    >
-                      🎁 {p.name}
-                    </button>
-                  ))}
+                  {participants.map((p) => {
+                    const userAssignment = assignments.find(a => a.santaId === p.id);
+                    const hasWritten = userAssignment?.messageSubmitted;
+                    
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => handleUserSelect(p.id)}
+                        className="participant-btn"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            🎁 {p.name}
+                          </span>
+                          {hasWritten && (
+                            <span style={{ 
+                              fontSize: '1rem',
+                              background: 'white',
+                              width: '32px',
+                              height: '32px',
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+                              flexShrink: 0
+                            }}>
+                              ✏️
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
                 
                 <div className="mt-8 pt-8 border-t">
@@ -699,7 +758,7 @@ export default function SecretSanta() {
             ) : userAssignment && (
               <div className="card scale-in">
                 <h2 className="christmas-font" style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#0a4d3c' }}>
-                  You've been paired with one teammate.
+                  {userAssignment.messageSubmitted ? '✏️ Edit Your Message' : 'You\'ve been paired with one teammate.'}
                 </h2>
                 
                 <div className="assignment-box">
@@ -739,15 +798,22 @@ export default function SecretSanta() {
                 
                 <div className="flex gap-4 mt-6">
                   {userAssignment.message.trim() && (
-                    <button
-                      onClick={() => {
-                        window.alert('Saved. Your secret is safe.');
-                        setCurrentUser(null);
-                      }}
-                      className="btn btn-primary"
-                    >
-                      💾 Save message
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setShowPreview(true)}
+                        className="btn btn-secondary"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowEditConfirmation(true);
+                        }}
+                        className="btn btn-primary"
+                      >
+                        {userAssignment.messageSubmitted ? 'Update message' : 'Save message'}
+                      </button>
+                    </>
                   )}
                   <button
                     onClick={() => setCurrentUser(null)}
@@ -763,12 +829,6 @@ export default function SecretSanta() {
         
         {phase === 'reveal' && currentAssignment && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-            <div className="card progress-card">
-              <p className="progress-text christmas-font">
-                🎁 Message {revealIndex + 1} of {assignments.length}
-              </p>
-            </div>
-            
             <div className="card scale-in">
               <div className="reveal-header fade-in-up">
                 <h2 className="reveal-header-title christmas-font">
@@ -846,27 +906,79 @@ export default function SecretSanta() {
               )}
             </div>
             
-            {/* Admin Controls */}
             {isAdmin && (
               <div className="card controls-card">
-                <div className="controls-buttons">
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '1rem',
+                  alignItems: 'center'
+                }}>
+                  <p style={{ 
+                    fontSize: '1.125rem', 
+                    fontWeight: 'bold', 
+                    color: '#6b7280',
+                    textAlign: 'center'
+                  }}>
+                    Message {revealIndex + 1} of {assignments.length}
+                  </p>
+                  
                   {revealStage === 'message' && (
-                    <button onClick={revealAuthor} className="btn btn-primary" style={{ fontSize: '1.25rem' }}>
+                    <button 
+                      onClick={revealAuthor} 
+                      className="btn btn-primary" 
+                      style={{ fontSize: '1.25rem', minWidth: '220px' }}
+                    >
                       🎅 Reveal author
                     </button>
                   )}
                   
-                  {revealStage === 'author' && revealIndex < assignments.length - 1 && (
-                    <button onClick={nextMessage} className="btn btn-primary" style={{ fontSize: '1.25rem' }}>
-                      Next message
-                    </button>
-                  )}
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '1rem',
+                    width: '100%',
+                    justifyContent: 'center',
+                    flexWrap: 'wrap'
+                  }}>
+                    {revealIndex > 0 && (
+                      <button 
+                        onClick={previousMessage} 
+                        className="btn btn-secondary" 
+                        style={{ fontSize: '1.125rem', minWidth: '140px' }}
+                      >
+                        Previous
+                      </button>
+                    )}
+                    
+                    {revealStage === 'author' && revealIndex < assignments.length - 1 && (
+                      <button 
+                        onClick={nextMessage} 
+                        className="btn btn-primary" 
+                        style={{ fontSize: '1.125rem', minWidth: '140px' }}
+                      >
+                        Next
+                      </button>
+                    )}
+                    
+                    {revealIndex === assignments.length - 1 && revealStage === 'author' && (
+                      <button 
+                        onClick={nextMessage} 
+                        className="btn btn-primary" 
+                        style={{ fontSize: '1.25rem', minWidth: '220px' }}
+                      >
+                        🎉 Continue to Finale
+                      </button>
+                    )}
+                  </div>
                   
-                  {revealIndex === assignments.length - 1 && revealStage === 'author' && (
-                    <button onClick={nextMessage} className="btn btn-primary" style={{ fontSize: '1.25rem' }}>
-                      🎉 Continue to Finale
-                    </button>
-                  )}
+                  <p style={{ 
+                    fontSize: '0.875rem', 
+                    color: '#9ca3af',
+                    textAlign: 'center',
+                    marginTop: '0.5rem'
+                  }}>
+                    💡 Use ← → arrow keys to navigate
+                  </p>
                 </div>
               </div>
             )}
@@ -923,6 +1035,7 @@ export default function SecretSanta() {
                 </div>
               </div>
               
+              {/* Participants Grid */}
               <div className="finale-participants-section">
                 <h3 className="finale-section-title christmas-font">Our Team 🎄</h3>
                 <div className="finale-participants-grid">
@@ -942,7 +1055,7 @@ export default function SecretSanta() {
                     className="btn btn-primary"
                     style={{ fontSize: '1.25rem', marginTop: '1rem' }}
                   >
-                    🔄 Start New Session
+                    Start New Session
                   </button>
                 </div>
               )}
@@ -1070,6 +1183,100 @@ export default function SecretSanta() {
                 className="btn btn-secondary"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showPreview && currentUser && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '1rem'
+        }}>
+          <div className="card" style={{ maxWidth: '700px', width: '100%', padding: '2rem' }}>
+            <h3 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '1rem', color: '#0a4d3c', textAlign: 'center' }}>
+              Preview
+            </h3>
+            <p style={{ marginBottom: '1.5rem', color: '#6b7280', textAlign: 'center' }}>
+              This is how your message will look during the reveal
+            </p>
+            
+            <div className="reveal-header fade-in-up" style={{ marginBottom: '2rem' }}>
+              <h2 className="reveal-header-title christmas-font">
+                A message written for
+              </h2>
+              <p className="reveal-header-name christmas-font glow-text">
+                {assignments.find(a => a.santaId === currentUser)?.receiverName}
+              </p>
+            </div>
+            
+            <div className="message-box">
+              <p className="message-text">
+                {assignments.find(a => a.santaId === currentUser)?.message || '(No message written)'}
+              </p>
+            </div>
+            
+            <button
+              onClick={() => setShowPreview(false)}
+              className="btn btn-primary"
+              style={{ width: '100%', marginTop: '1.5rem' }}
+            >
+              Close Preview
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {showEditConfirmation && currentUser && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div className="card" style={{ maxWidth: '500px', padding: '2rem' }}>
+            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+            </div>
+            <h3 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '1rem', color: '#0a4d3c', textAlign: 'center' }}>
+              {assignments.find(a => a.santaId === currentUser)?.messageSubmitted ? 'Message Updated!' : 'Message Saved!'}
+            </h3>
+            <p style={{ marginBottom: '1.5rem', color: '#374151', textAlign: 'center', fontSize: '1.125rem' }}>
+              Your secret is safe. You can edit your message anytime before the reveal starts.
+            </p>
+            
+            <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
+              <button
+                onClick={() => {
+                  setShowEditConfirmation(false);
+                  setCurrentUser(null);
+                }}
+                className="btn btn-primary"
+                style={{ width: '100%' }}
+              >
+                Done
+              </button>
+              <button
+                onClick={() => setShowEditConfirmation(false)}
+                className="btn btn-secondary"
+                style={{ width: '100%' }}
+              >
+                Keep Editing
               </button>
             </div>
           </div>
