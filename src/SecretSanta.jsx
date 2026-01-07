@@ -47,6 +47,7 @@ const generateDerangement = (participants) => {
         receiverId: shuffled[i].id,
         receiverName: shuffled[i].name,
         message: '',
+        messageSubmitted: false,
         revealed: false
       }));
     }
@@ -336,7 +337,7 @@ export default function SecretSanta() {
   // Save message
   const saveMessage = (assignmentId, message) => {
     const updated = assignments.map(a =>
-      a.assignmentId === assignmentId ? { ...a, message } : a
+      a.assignmentId === assignmentId ? { ...a, message, messageSubmitted: true } : a
     );
     saveAssignments(updated);
   };
@@ -347,6 +348,18 @@ export default function SecretSanta() {
       setShowAdminPrompt(true);
       return;
     }
+    
+    const incompleteMessages = assignments.filter(a => !a.messageSubmitted);
+    
+    if (incompleteMessages.length > 0) {
+      const names = incompleteMessages.map(a => a.santaName).join(', ');
+      const warning = `Warning: ${incompleteMessages.length} person(s) haven't written their message yet:\n\n${names}\n\nTheir recipients will see "(No message written)"\n\nContinue anyway?`;
+      
+      if (!window.confirm(warning)) {
+        return;
+      }
+    }
+    
     savePhase('reveal');
     saveRevealState(0, 'name', false);
   };
@@ -567,6 +580,89 @@ export default function SecretSanta() {
         
         {phase === 'writing' && (
           <div>
+            {isAdmin && (
+              <div className="card fade-in-up" style={{ marginBottom: '2rem' }}>
+                <h2 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '1.5rem', color: '#0a4d3c' }}>
+                  📊 Writing Progress
+                </h2>
+                
+                <div style={{ 
+                  padding: '1.5rem', 
+                  background: 'linear-gradient(135deg, #fef2f2, #f0fdf4)', 
+                  borderRadius: '1rem',
+                  border: '3px solid #ffd700',
+                  marginBottom: '1.5rem'
+                }}>
+                  <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#c41e3a', textAlign: 'center', marginBottom: '0.5rem' }}>
+                    {assignments.filter(a => a.messageSubmitted).length} / {assignments.length}
+                  </div>
+                  <div style={{ fontSize: '1rem', color: '#6b7280', textAlign: 'center', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Messages Written
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {assignments.map((assignment) => (
+                    <div 
+                      key={assignment.assignmentId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '1rem',
+                        background: assignment.messageSubmitted 
+                          ? 'linear-gradient(to right, #f0fdf4, #d1fae5)' 
+                          : 'linear-gradient(to right, #fef2f2, #fee2e2)',
+                        borderRadius: '0.75rem',
+                        border: assignment.messageSubmitted ? '2px solid #10b981' : '2px solid #ef4444',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <span style={{ fontSize: '1.5rem' }}>
+                          {assignment.messageSubmitted ? '✅' : '⏳'}
+                        </span>
+                        <div>
+                          <span style={{ fontWeight: 'bold', color: '#0a4d3c', fontSize: '1.125rem' }}>
+                            {assignment.santaName}
+                          </span>
+                          <span style={{ color: '#6b7280', fontSize: '1rem' }}> → </span>
+                          <span style={{ fontWeight: 600, color: '#374151', fontSize: '1rem' }}>
+                            {assignment.receiverName}
+                          </span>
+                        </div>
+                      </div>
+                      <span style={{ 
+                        fontSize: '0.875rem', 
+                        fontWeight: 600,
+                        color: assignment.messageSubmitted ? '#059669' : '#dc2626'
+                      }}>
+                        {assignment.messageSubmitted ? 'Submitted' : 'Pending'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                
+                {assignments.filter(a => !a.messageSubmitted).length > 0 && (
+                  <div style={{
+                    marginTop: '1.5rem',
+                    padding: '1rem',
+                    background: '#fef3c7',
+                    borderRadius: '0.75rem',
+                    border: '2px solid #f59e0b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem'
+                  }}>
+                    <span style={{ fontSize: '1.5rem' }}>⚠️</span>
+                    <p style={{ fontSize: '0.875rem', color: '#92400e', margin: 0, fontWeight: 600 }}>
+                      {assignments.filter(a => !a.messageSubmitted).length} person(s) haven't written yet. 
+                      You can still start the reveal, but their recipients will see "(No message written)".
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {!currentUser ? (
               <div className="card fade-in-up">
                 <h2 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '2rem', color: '#0a4d3c' }}>
@@ -617,6 +713,22 @@ export default function SecretSanta() {
                   Write something kind, thoughtful, or lightly funny.<br/>
                   Keep it nice. Keep it human.
                 </p>
+                
+                <div style={{
+                  padding: '0.75rem 1rem',
+                  background: '#fef3c7',
+                  borderRadius: '0.75rem',
+                  border: '2px solid #f59e0b',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <span style={{ fontSize: '1.25rem' }}>⏰</span>
+                  <p style={{ fontSize: '0.875rem', color: '#92400e', margin: 0, fontWeight: 600 }}>
+                    Once the reveal starts, you won't be able to write or edit your message!
+                  </p>
+                </div>
                 
                 <textarea
                   value={userAssignment.message}
@@ -830,7 +942,7 @@ export default function SecretSanta() {
                     className="btn btn-primary"
                     style={{ fontSize: '1.25rem', marginTop: '1rem' }}
                   >
-                    Start New Session
+                    🔄 Start New Session
                   </button>
                 </div>
               )}
