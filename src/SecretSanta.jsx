@@ -92,6 +92,8 @@ const Snowflake = ({ delay, duration, left }) => (
 );
 
 export default function SecretSanta() {
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionInput, setSessionInput] = useState('');
   const [phase, setPhase] = useState('setup');
   const [participants, setParticipants] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -128,6 +130,12 @@ export default function SecretSanta() {
   
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    const urlSessionId = urlParams.get('session');
+    
+    if (urlSessionId) {
+      setSessionId(urlSessionId);
+    }
+    
     if (urlParams.get('reset') === 'true') {
       const confirmReset = window.confirm('Emergency reset: Delete all data and start fresh?');
       if (confirmReset) {
@@ -137,6 +145,10 @@ export default function SecretSanta() {
         return;
       }
     }
+    
+    if (!sessionId && !urlSessionId) return;
+    
+    const activeSessionId = sessionId || urlSessionId;
     
     const applyBatchedUpdates = () => {
       const updates = pendingUpdatesRef.current;
@@ -170,13 +182,13 @@ export default function SecretSanta() {
       }, 16);
     };
     
-    const phaseRef = ref(db, 'santa-phase');
-    const participantsRef = ref(db, 'santa-participants');
-    const assignmentsRef = ref(db, 'santa-assignments');
-    const reactionsRef = ref(db, 'santa-reactions');
-    const adminCodeRef = ref(db, 'santa-admin-code');
-    const revealStateRef = ref(db, 'santa-reveal-state');
-    const userPinsRef = ref(db, 'santa-user-pins');
+    const phaseRef = ref(db, `sessions/${activeSessionId}/phase`);
+    const participantsRef = ref(db, `sessions/${activeSessionId}/participants`);
+    const assignmentsRef = ref(db, `sessions/${activeSessionId}/assignments`);
+    const reactionsRef = ref(db, `sessions/${activeSessionId}/reactions`);
+    const adminCodeRef = ref(db, `sessions/${activeSessionId}/admin-code`);
+    const revealStateRef = ref(db, `sessions/${activeSessionId}/reveal-state`);
+    const userPinsRef = ref(db, `sessions/${activeSessionId}/user-pins`);
     
     const unsubPhase = onValue(phaseRef, (snapshot) => {
       const val = snapshot.val();
@@ -225,7 +237,7 @@ export default function SecretSanta() {
       unsubRevealState();
       unsubUserPins();
     };
-  }, []);
+  }, [sessionId]);
   
   useEffect(() => {
     if (phase === 'reveal' && revealStage === 'name' && !showMessage) {
@@ -262,28 +274,65 @@ export default function SecretSanta() {
   }, [phase, isAdmin, revealIndex, revealStage, assignments.length]);
   
   const savePhase = (newPhase) => {
-    set(ref(db, 'santa-phase'), newPhase);
+    if (!sessionId) return;
+    set(ref(db, `sessions/${sessionId}/phase`), newPhase);
   };
   
   const saveParticipants = (newParticipants) => {
-    set(ref(db, 'santa-participants'), newParticipants);
+    if (!sessionId) return;
+    set(ref(db, `sessions/${sessionId}/participants`), newParticipants);
   };
   
   const saveAssignments = (newAssignments) => {
-    set(ref(db, 'santa-assignments'), newAssignments);
+    if (!sessionId) return;
+    set(ref(db, `sessions/${sessionId}/assignments`), newAssignments);
   };
   
   const saveReactions = (newReactions) => {
-    set(ref(db, 'santa-reactions'), newReactions);
+    if (!sessionId) return;
+    set(ref(db, `sessions/${sessionId}/reactions`), newReactions);
   };
   
   const saveRevealState = useCallback((index, stage, messageShown = false) => {
-    set(ref(db, 'santa-reveal-state'), { 
+    if (!sessionId) return;
+    set(ref(db, `sessions/${sessionId}/reveal-state`), { 
       index, 
       stage,
       showMessage: messageShown 
     });
-  }, []);
+  }, [sessionId]);
+  
+  const generateSessionId = () => {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  };
+  
+  const createNewSession = () => {
+    const newSessionId = generateSessionId();
+    setSessionId(newSessionId);
+    const url = new URL(window.location);
+    url.searchParams.set('session', newSessionId);
+    window.history.pushState({}, '', url);
+  };
+  
+  const joinSession = () => {
+    if (!sessionInput.trim() || sessionInput.length !== 6) {
+      alert('Please enter a valid 6-character session code');
+      return;
+    }
+    const uppercaseSessionId = sessionInput.toUpperCase();
+    setSessionId(uppercaseSessionId);
+    const url = new URL(window.location);
+    url.searchParams.set('session', uppercaseSessionId);
+    window.history.pushState({}, '', url);
+    setSessionInput('');
+  };
+  
+  const copySessionLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?session=${sessionId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      alert('Session link copied! Share it with your team.');
+    });
+  };
   
   // Add participant
   const addParticipant = () => {
@@ -317,7 +366,7 @@ export default function SecretSanta() {
     }
     
     // Save admin code
-    set(ref(db, 'santa-admin-code'), adminCode);
+    set(ref(db, `sessions/${sessionId}/admin-code`), adminCode);
     
     // Shuffle reveal order
     const shuffled = [...derangement].sort(() => Math.random() - 0.5);
@@ -343,7 +392,7 @@ export default function SecretSanta() {
         return;
       }
       // Save new PIN
-      set(ref(db, `santa-user-pins/${selectedUserId}`), pinInput);
+      set(ref(db, `sessions/${sessionId}/user-pins/${selectedUserId}`), pinInput);
       setCurrentUser(selectedUserId);
       setShowPinPrompt(false);
       setPinInput('');
@@ -506,6 +555,105 @@ export default function SecretSanta() {
       
       <div className="content-wrapper">
         
+        {!sessionId && (
+          <div className="fade-in-up" style={{ marginTop: '2rem' }}>
+            <div className="header">
+              <div className="header-ornaments">
+                <Gift className="text-yellow-300" size={48} style={{ color: '#fde047' }} />
+                <h1 className="header-title christmas-font glow-text">
+                  Secret Santa
+                </h1>
+                <Gift className="text-yellow-300" size={48} style={{ color: '#fde047' }} />
+              </div>
+              <p className="header-subtitle">✨ Multi-Team Appreciation Portal ✨</p>
+            </div>
+            
+            <div className="card scale-in">
+              <h2 className="christmas-font" style={{ fontSize: '2rem', marginBottom: '1.5rem', color: '#0a4d3c', textAlign: 'center' }}>
+                Start or Join a Session
+              </h2>
+              
+              <p style={{ textAlign: 'center', color: '#6b7280', marginBottom: '2rem', fontSize: '1.125rem' }}>
+                Each team needs their own session. Create a new one or join an existing session with a code.
+              </p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                <div style={{ 
+                  padding: '2rem', 
+                  background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)', 
+                  borderRadius: '1rem',
+                  border: '3px solid #10b981'
+                }}>
+                  <h3 className="christmas-font" style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0a4d3c', textAlign: 'center' }}>
+                    🎄 Create New Session
+                  </h3>
+                  <p style={{ textAlign: 'center', color: '#374151', marginBottom: '1.5rem' }}>
+                    Start a new Secret Santa for your team
+                  </p>
+                  <button 
+                    onClick={createNewSession}
+                    className="btn btn-primary"
+                    style={{ width: '100%', fontSize: '1.25rem' }}
+                  >
+                    🎅 Create Session
+                  </button>
+                </div>
+                
+                <div style={{ 
+                  padding: '2rem', 
+                  background: 'linear-gradient(135deg, #fef3c7, #fde68a)', 
+                  borderRadius: '1rem',
+                  border: '3px solid #f59e0b'
+                }}>
+                  <h3 className="christmas-font" style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0a4d3c', textAlign: 'center' }}>
+                    🎁 Join Existing Session
+                  </h3>
+                  <p style={{ textAlign: 'center', color: '#374151', marginBottom: '1.5rem' }}>
+                    Enter the 6-character session code shared by your team
+                  </p>
+                  <input
+                    type="text"
+                    value={sessionInput}
+                    onChange={(e) => setSessionInput(e.target.value.toUpperCase())}
+                    placeholder="Enter code (e.g., ABC123)"
+                    maxLength={6}
+                    style={{
+                      width: '100%',
+                      padding: '1rem',
+                      fontSize: '1.5rem',
+                      textAlign: 'center',
+                      border: '3px solid #f59e0b',
+                      borderRadius: '0.75rem',
+                      marginBottom: '1rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.2em',
+                      fontWeight: 'bold'
+                    }}
+                  />
+                  <button 
+                    onClick={joinSession}
+                    className="btn btn-primary"
+                    style={{ width: '100%', fontSize: '1.25rem' }}
+                  >
+                    Join Session
+                  </button>
+                </div>
+              </div>
+              
+              <div style={{
+                marginTop: '2rem',
+                padding: '1rem',
+                background: '#f3f4f6',
+                borderRadius: '0.75rem',
+                border: '2px solid #d1d5db'
+              }}>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {sessionId && (
+          <>
         <div className="header fade-in-up">
           <div className="header-ornaments">
             <span className="ornament ornament-red"></span>
@@ -524,6 +672,45 @@ export default function SecretSanta() {
             {phase === 'reveal' && '🎉 The reveal begins 🎉'}
             {phase === 'finale' && '🎊 Celebrating Together 🎊'}
           </p>
+          
+          <div style={{
+            marginTop: '1rem',
+            padding: '0.75rem 1.5rem',
+            background: 'rgba(255, 255, 255, 0.15)',
+            borderRadius: '1rem',
+            border: '2px solid rgba(255, 215, 0, 0.5)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '1rem'
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ fontSize: '0.75rem', color: '#fde047', marginBottom: '0.25rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                Session Code
+              </p>
+              <p style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white', letterSpacing: '0.3em', fontFamily: 'monospace' }}>
+                {sessionId}
+              </p>
+            </div>
+            <button
+              onClick={copySessionLink}
+              style={{
+                background: '#ffd700',
+                border: 'none',
+                borderRadius: '0.5rem',
+                padding: '0.5rem 1rem',
+                fontSize: '0.875rem',
+                fontWeight: 'bold',
+                color: '#0a4d3c',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+              }}
+              onMouseOver={(e) => e.target.style.transform = 'scale(1.05)'}
+              onMouseOut={(e) => e.target.style.transform = 'scale(1)'}
+            >
+              Copy Link
+            </button>
+          </div>
         </div>
         
         {showConfetti && (
@@ -1069,6 +1256,8 @@ export default function SecretSanta() {
               )}
             </div>
           </div>
+        )}
+        </>
         )}
       </div>
       
