@@ -1933,19 +1933,10 @@ export default function SecretSanta() {
 
             <div className="message-box">
               <p className="message-text">
-                {currentAssignment.message || getRandomFallback()}
-                {!currentAssignment.message && (
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: "0.8rem",
-                      marginTop: "1rem",
-                      fontStyle: "italic",
-                      opacity: 0.7,
-                    }}
-                  >
-                    (The Secret Santa was too shy to write a message, so the
-                    elves wrote this one!)
+                {userAssignment.message || getRandomFallback()}
+                {!userAssignment.message && (
+                  <span style={{ display: 'block', fontSize: '0.8rem', marginTop: '1rem', fontStyle: 'italic', opacity: 0.7 }}>
+                    (The Secret Santa was too shy to write a message, so the elves wrote this one!)
                   </span>
                 )}
               </p>
