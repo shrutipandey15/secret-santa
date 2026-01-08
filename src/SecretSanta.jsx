@@ -562,31 +562,34 @@ export default function SecretSanta() {
     return reactions[key] || 0;
   };
 
+  // 1. Fix the broken Reset All function
   const resetAll = async () => {
-    if (!window.confirm("Reset everything? This cannot be undone.")) return;
-
+    if (!sessionId) return;
+    if (!window.confirm('Reset everything? This cannot be undone.')) return;
+    
     try {
-      await remove(ref(db, "santa-phase"));
-      await remove(ref(db, "santa-participants"));
-      await remove(ref(db, "santa-assignments"));
-      await remove(ref(db, "santa-reactions"));
-      await remove(ref(db, "santa-reveal-state"));
-      await remove(ref(db, "santa-admin-code"));
-      await remove(ref(db, "santa-user-pins"));
-
-      setPhase("setup");
-      setParticipants([]);
-      setAssignments([]);
-      setCurrentUser(null);
-      setRevealIndex(0);
-      setRevealStage("name");
-      setShowMessage(false);
-      setReactions({});
-      setAdminCode("");
-      setIsAdmin(false);
-      setUserPins({});
+      // FIX: Use the correct session path!
+      await remove(ref(db, `sessions/${sessionId}`));
+      window.location.reload();
     } catch (error) {
-      console.error("Reset failed:", error);
+      console.error('Reset failed:', error);
+    }
+  };
+
+  const returnToSetup = async () => {
+    if (!window.confirm('⚠️ Unlock to add people?\n\nThis will KEEP the current list of names, but it MUST re-shuffle the assignments to include the new people.\n\nAre you sure?')) {
+      return;
+    }
+    
+    try {
+      // Try atomic update
+      const updates = {};
+      updates[`sessions/${sessionId}/phase`] = 'setup';
+      updates[`sessions/${sessionId}/assignments`] = null;
+      await db.ref().update(updates);
+    } catch (e) {
+      set(ref(db, `sessions/${sessionId}/phase`), 'setup');
+      set(ref(db, `sessions/${sessionId}/assignments`), null);
     }
   };
 
@@ -1149,6 +1152,18 @@ export default function SecretSanta() {
                         </p>
                       </div>
                     )}
+                    <div style={{ marginTop: '1.5rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' }}>
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem', textAlign: 'center' }}>
+                    Need to add more people or fix a typo?
+                  </p>
+                  <button 
+                    onClick={returnToSetup}
+                    className="btn btn-secondary"
+                    style={{ width: '100%', borderColor: '#f87171', color: '#dc2626' }}
+                  >
+                    ⚠️ Unlock & Edit Participants
+                  </button>
+                </div>
                   </div>
                 )}
 
