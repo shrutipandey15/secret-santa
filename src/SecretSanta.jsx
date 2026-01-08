@@ -146,66 +146,85 @@ export default function SecretSanta() {
   }, []);
 
   useEffect(() => {
+    console.log("--- Debug: Effect 1 running (checking URL) ---");
     const urlParams = new URLSearchParams(window.location.search);
-    const urlSessionId = urlParams.get("session");
-
+    const urlSessionId = urlParams.get('session');
+    
     if (urlSessionId) {
-      setSessionId(urlSessionId);
+      console.log("Debug: Found session ID in URL:", urlSessionId);
+      setSessionId((prevId) => {
+         if (prevId !== urlSessionId) {
+             console.log("Debug: Setting session ID state to:", urlSessionId);
+             return urlSessionId;
+         }
+         return prevId;
+      });
+    } else {
+      console.log("Debug: No session ID in URL.");
     }
-
-    if (urlParams.get("reset") === "true") {
-      const confirmReset = window.confirm(
-        "Emergency reset: Delete all data and start fresh?"
-      );
+    
+    if (urlParams.get('reset') === 'true') {
+      const confirmReset = window.confirm('Emergency reset: Delete all data and start fresh?');
       if (confirmReset) {
-        const targetSession = urlParams.get("session");
+        const targetSession = urlParams.get('session');
         if (targetSession) {
           remove(ref(db, `sessions/${targetSession}`)).then(() => {
             window.location.href = window.location.pathname;
           });
         }
-        return;
       }
     }
+  }, []);
 
-    if (!sessionId && !urlSessionId) return;
+  useEffect(() => {
+    console.log("--- Debug: Effect 2 running. Current sessionId state:", sessionId);
+    
+    if (!sessionId) {
+        console.log("Debug: Session ID is null, waiting...");
+        return; // WAIT until we have the ID, then sync
+    }
 
-    const activeSessionId = sessionId || urlSessionId;
-
+    console.log("Debug: Starting Firebase listeners for session:", sessionId);
+    
     const applyBatchedUpdates = () => {
       const updates = pendingUpdatesRef.current;
-
+      console.log("Debug: Applying batched updates to state:", Object.keys(updates));
+      
       if (updates.phase !== undefined) setPhase(updates.phase);
-      if (updates.participants !== undefined)
-        setParticipants(updates.participants);
-      if (updates.assignments !== undefined)
-        setAssignments(updates.assignments);
+      // ADDED DEBUG LOG FOR PARTICIPANTS UPDATE
+      if (updates.participants !== undefined) {
+          console.log("Debug: Updating participants state with:", updates.participants);
+          setParticipants(updates.participants);
+      }
+      if (updates.assignments !== undefined) setAssignments(updates.assignments);
       if (updates.reactions !== undefined) setReactions(updates.reactions);
       if (updates.adminCode !== undefined) setAdminCode(updates.adminCode);
       if (updates.revealState !== undefined) {
         const val = updates.revealState;
         setRevealIndex(val.index || 0);
-        setRevealStage(val.stage || "name");
+        setRevealStage(val.stage || 'name');
         setShowMessage(val.showMessage || false);
       }
       if (updates.userPins !== undefined) setUserPins(updates.userPins);
-
+      
       pendingUpdatesRef.current = {};
     };
-
+    
     const scheduleUpdate = (key, value) => {
       pendingUpdatesRef.current[key] = value;
-
+      
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
       }
-
+      
       updateTimeoutRef.current = setTimeout(() => {
         applyBatchedUpdates();
         updateTimeoutRef.current = null;
       }, 16);
     };
-
+    
+    const activeSessionId = sessionId; // We know sessionId exists here
+    
     const phaseRef = ref(db, `sessions/${activeSessionId}/phase`);
     const participantsRef = ref(db, `sessions/${activeSessionId}/participants`);
     const assignmentsRef = ref(db, `sessions/${activeSessionId}/assignments`);
@@ -213,42 +232,43 @@ export default function SecretSanta() {
     const adminCodeRef = ref(db, `sessions/${activeSessionId}/admin-code`);
     const revealStateRef = ref(db, `sessions/${activeSessionId}/reveal-state`);
     const userPinsRef = ref(db, `sessions/${activeSessionId}/user-pins`);
-
+    
     const unsubPhase = onValue(phaseRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate("phase", val);
-    });
 
+      if (val) scheduleUpdate('phase', val);
+    });
+    
     const unsubParticipants = onValue(participantsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate("participants", val);
+      if (val) scheduleUpdate('participants', val);
     });
-
+    
     const unsubAssignments = onValue(assignmentsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate("assignments", val);
+      if (val) scheduleUpdate('assignments', val);
     });
-
+    
     const unsubReactions = onValue(reactionsRef, (snapshot) => {
       const val = snapshot.val();
-      scheduleUpdate("reactions", val || {});
+      scheduleUpdate('reactions', val || {});
     });
-
+    
     const unsubAdminCode = onValue(adminCodeRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate("adminCode", val);
+      if (val) scheduleUpdate('adminCode', val);
     });
-
+    
     const unsubRevealState = onValue(revealStateRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate("revealState", val);
+      if (val) scheduleUpdate('revealState', val);
     });
-
+    
     const unsubUserPins = onValue(userPinsRef, (snapshot) => {
       const val = snapshot.val();
-      scheduleUpdate("userPins", val || {});
+      scheduleUpdate('userPins', val || {});
     });
-
+    
     return () => {
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
