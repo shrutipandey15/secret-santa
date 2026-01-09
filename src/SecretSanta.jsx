@@ -1,8 +1,19 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Gift, Heart, Sparkles, Eye, Flame, Star } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Gift, Loader2 } from "lucide-react";
 import { db } from "./firebase";
 import { ref, set, onValue, remove } from "firebase/database";
 import "./SecretSanta.css";
+
+// Components
+import Snowflake from "./components/Snowflake";
+import AdminPromptModal from "./components/modals/AdminPromptModal";
+import PinPromptModal from "./components/modals/PinPromptModal";
+import PreviewModal from "./components/modals/PreviewModal";
+import EditConfirmationModal from "./components/modals/EditConfirmationModal";
+import SetupPhase from "./components/phases/SetupPhase";
+import WritingPhase from "./components/phases/WritingPhase";
+import RevealPhase from "./components/phases/RevealPhase";
+import FinalePhase from "./components/phases/FinalePhase";
 
 const generateDerangement = (participants) => {
   const n = participants.length;
@@ -64,14 +75,6 @@ const generateDerangement = (participants) => {
   return null;
 };
 
-const REACTIONS = [
-  { id: "heart", label: "wholesome", icon: Heart, color: "#ff6b9d" },
-  { id: "star", label: "funny", icon: Star, color: "#ffd700" },
-  { id: "eye", label: "suspicious", icon: Eye, color: "#8b5cf6" },
-  { id: "sparkle", label: "thoughtful", icon: Sparkles, color: "#3b82f6" },
-  { id: "fire", label: "iconic", icon: Flame, color: "#ff6b00" },
-];
-
 const FALLBACK_MESSAGES = [
   "You're an awesome team member!⭐",
   "May your year be sparklier than this app! ✨",
@@ -83,35 +86,11 @@ const getRandomFallback = () => {
   ];
 };
 
-const ReactionIcon = ({ type, color }) => {
-  const reaction = REACTIONS.find((r) => r.id === type);
-  if (!reaction) return null;
-
-  const Icon = reaction.icon;
-  return (
-    <div className={`reaction-icon reaction-${type}`}>
-      <Icon size={32} strokeWidth={2.5} color={color || reaction.color} />
-    </div>
-  );
-};
-
-const Snowflake = ({ delay, duration, left }) => (
-  <div
-    className="snowflake"
-    style={{
-      left: `${left}%`,
-      animationDelay: `${delay}s`,
-      animationDuration: `${duration}s`,
-    }}
-  >
-    ❄
-  </div>
-);
-
 export default function SecretSanta() {
   const [sessionId, setSessionId] = useState(null);
   const [sessionInput, setSessionInput] = useState("");
   const [phase, setPhase] = useState("setup");
+  const [isLoading, setIsLoading] = useState(false);
   const [participants, setParticipants] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -123,7 +102,11 @@ export default function SecretSanta() {
   const [newParticipantName, setNewParticipantName] = useState("");
   const [adminCode, setAdminCode] = useState("");
   const [adminCodeInput, setAdminCodeInput] = useState("");
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(() => {
+    if (!sessionId) return false;
+    const stored = localStorage.getItem(`admin-${sessionId}`);
+    return stored === "true";
+  });
   const [showAdminPrompt, setShowAdminPrompt] = useState(false);
   const [userPins, setUserPins] = useState({});
   const [showPinPrompt, setShowPinPrompt] = useState(false);
@@ -136,7 +119,7 @@ export default function SecretSanta() {
   const updateTimeoutRef = useRef(null);
   const pendingUpdatesRef = useRef({});
 
-  const snowflakes = React.useMemo(() => {
+  const snowflakes = useMemo(() => {
     return Array.from({ length: 30 }).map((_, i) => ({
       id: i,
       delay: Math.random() * 10,
@@ -145,28 +128,40 @@ export default function SecretSanta() {
     }));
   }, []);
 
+  const currentAssignment = useMemo(
+    () => assignments[revealIndex],
+    [assignments, revealIndex]
+  );
+
+  const userAssignment = useMemo(
+    () => assignments.find((a) => a.santaId === currentUser),
+    [assignments, currentUser]
+  );
+
   useEffect(() => {
     console.log("--- Debug: Effect 1 running (checking URL) ---");
     const urlParams = new URLSearchParams(window.location.search);
-    const urlSessionId = urlParams.get('session');
-    
+    const urlSessionId = urlParams.get("session");
+
     if (urlSessionId) {
+      setIsLoading(true);
       console.log("Debug: Found session ID in URL:", urlSessionId);
       setSessionId((prevId) => {
-         if (prevId !== urlSessionId) {
-             console.log("Debug: Setting session ID state to:", urlSessionId);
-             return urlSessionId;
-         }
-         return prevId;
+        if (prevId !== urlSessionId) {
+          return urlSessionId;
+        }
+        return prevId;
       });
     } else {
       console.log("Debug: No session ID in URL.");
     }
-    
-    if (urlParams.get('reset') === 'true') {
-      const confirmReset = window.confirm('Emergency reset: Delete all data and start fresh?');
+
+    if (urlParams.get("reset") === "true") {
+      const confirmReset = window.confirm(
+        "Emergency reset: Delete all data and start fresh?"
+      );
       if (confirmReset) {
-        const targetSession = urlParams.get('session');
+        const targetSession = urlParams.get("session");
         if (targetSession) {
           remove(ref(db, `sessions/${targetSession}`)).then(() => {
             window.location.href = window.location.pathname;
@@ -177,24 +172,34 @@ export default function SecretSanta() {
   }, []);
 
   useEffect(() => {
-    console.log("--- Debug: Effect 2 running. Current sessionId state:", sessionId);
-    
-    if (!sessionId) {
-        console.log("Debug: Session ID is null, waiting...");
-        return; // WAIT until we have the ID, then sync
+    if (sessionId) {
+      const stored = localStorage.getItem(`admin-${sessionId}`);
+      if (stored === "true") {
+        setIsAdmin(true);
+      }
     }
+  }, [sessionId]);
+
+  useEffect(() => {
+    console.log(
+      "--- Debug: Effect 2 running. Current sessionId state:",
+      sessionId
+    );
+
+    if (!sessionId) {
+      return;
+    }
+    
+    setIsLoading(true);
 
     console.log("Debug: Starting Firebase listeners for session:", sessionId);
-    
+
     const applyBatchedUpdates = () => {
       const updates = pendingUpdatesRef.current;
-      console.log("Debug: Applying batched updates to state:", Object.keys(updates));
-      
+
       if (updates.phase !== undefined) setPhase(updates.phase);
-      // ADDED DEBUG LOG FOR PARTICIPANTS UPDATE
       if (updates.participants !== undefined) {
-          console.log("Debug: Updating participants state with:", updates.participants);
-          setParticipants(updates.participants);
+        setParticipants(updates.participants);
       }
       if (updates.assignments !== undefined) setAssignments(updates.assignments);
       if (updates.reactions !== undefined) setReactions(updates.reactions);
@@ -202,29 +207,31 @@ export default function SecretSanta() {
       if (updates.revealState !== undefined) {
         const val = updates.revealState;
         setRevealIndex(val.index || 0);
-        setRevealStage(val.stage || 'name');
+        setRevealStage(val.stage || "name");
         setShowMessage(val.showMessage || false);
       }
       if (updates.userPins !== undefined) setUserPins(updates.userPins);
-      
+
       pendingUpdatesRef.current = {};
+      
+      setIsLoading(false);
     };
-    
+
     const scheduleUpdate = (key, value) => {
       pendingUpdatesRef.current[key] = value;
-      
+
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
       }
-      
+
       updateTimeoutRef.current = setTimeout(() => {
         applyBatchedUpdates();
         updateTimeoutRef.current = null;
       }, 16);
     };
-    
-    const activeSessionId = sessionId; // We know sessionId exists here
-    
+
+    const activeSessionId = sessionId;
+
     const phaseRef = ref(db, `sessions/${activeSessionId}/phase`);
     const participantsRef = ref(db, `sessions/${activeSessionId}/participants`);
     const assignmentsRef = ref(db, `sessions/${activeSessionId}/assignments`);
@@ -232,43 +239,46 @@ export default function SecretSanta() {
     const adminCodeRef = ref(db, `sessions/${activeSessionId}/admin-code`);
     const revealStateRef = ref(db, `sessions/${activeSessionId}/reveal-state`);
     const userPinsRef = ref(db, `sessions/${activeSessionId}/user-pins`);
-    
+
     const unsubPhase = onValue(phaseRef, (snapshot) => {
       const val = snapshot.val();
-
-      if (val) scheduleUpdate('phase', val);
+      if (val) {
+        scheduleUpdate("phase", val);
+      } else {
+        setIsLoading(false);
+      }
     });
-    
+
     const unsubParticipants = onValue(participantsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate('participants', val);
+      if (val) scheduleUpdate("participants", val);
     });
-    
+
     const unsubAssignments = onValue(assignmentsRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate('assignments', val);
+      if (val) scheduleUpdate("assignments", val);
     });
-    
+
     const unsubReactions = onValue(reactionsRef, (snapshot) => {
       const val = snapshot.val();
-      scheduleUpdate('reactions', val || {});
+      scheduleUpdate("reactions", val || {});
     });
-    
+
     const unsubAdminCode = onValue(adminCodeRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate('adminCode', val);
+      if (val) scheduleUpdate("adminCode", val);
     });
-    
+
     const unsubRevealState = onValue(revealStateRef, (snapshot) => {
       const val = snapshot.val();
-      if (val) scheduleUpdate('revealState', val);
+      if (val) scheduleUpdate("revealState", val);
     });
-    
+
     const unsubUserPins = onValue(userPinsRef, (snapshot) => {
       const val = snapshot.val();
-      scheduleUpdate('userPins', val || {});
+      scheduleUpdate("userPins", val || {});
     });
-    
+
     return () => {
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
@@ -283,6 +293,18 @@ export default function SecretSanta() {
     };
   }, [sessionId]);
 
+  const saveRevealState = useCallback(
+    (index, stage, messageShown = false) => {
+      if (!sessionId) return;
+      set(ref(db, `sessions/${sessionId}/reveal-state`), {
+        index,
+        stage,
+        showMessage: messageShown,
+      });
+    },
+    [sessionId]
+  );
+
   useEffect(() => {
     if (phase === "reveal" && revealStage === "name" && !showMessage) {
       const timer = setTimeout(() => {
@@ -290,7 +312,31 @@ export default function SecretSanta() {
       }, 700);
       return () => clearTimeout(timer);
     }
-  }, [phase, revealStage, showMessage, revealIndex]);
+  }, [phase, revealStage, showMessage, revealIndex, saveRevealState]);
+
+  const previousMessage = useCallback(() => {
+    if (revealIndex > 0) {
+      saveRevealState(revealIndex - 1, "author", true);
+      setShowConfetti(false);
+    }
+  }, [revealIndex, saveRevealState]);
+
+  const nextMessage = useCallback(() => {
+    if (revealIndex < assignments.length - 1) {
+      saveRevealState(revealIndex + 1, "name", false);
+      setShowConfetti(false);
+    } else {
+      if (!sessionId) return;
+      set(ref(db, `sessions/${sessionId}/phase`), "finale");
+      setShowConfetti(true);
+    }
+  }, [revealIndex, assignments.length, saveRevealState, sessionId]);
+
+  const revealAuthor = useCallback(() => {
+    saveRevealState(revealIndex, "author", true);
+    setShowConfetti(true);
+    setTimeout(() => setShowConfetti(false), 3000);
+  }, [revealIndex, saveRevealState]);
 
   useEffect(() => {
     if (phase !== "reveal" || !isAdmin) return;
@@ -305,46 +351,47 @@ export default function SecretSanta() {
         previousMessage();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
+        nextMessage();
+      } else if (e.key === " " || e.key === "Spacebar") {
+        e.preventDefault();
         if (revealStage === "message") {
           revealAuthor();
-        } else if (revealStage === "author") {
-          nextMessage();
         }
       }
     };
 
     window.addEventListener("keydown", handleKeyPress);
     return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [phase, isAdmin, revealIndex, revealStage, assignments.length]);
+  }, [phase, isAdmin, revealStage, previousMessage, nextMessage, revealAuthor]);
 
-  const savePhase = (newPhase) => {
-    if (!sessionId) return;
-    set(ref(db, `sessions/${sessionId}/phase`), newPhase);
-  };
-
-  const saveParticipants = (newParticipants) => {
-    if (!sessionId) return;
-    set(ref(db, `sessions/${sessionId}/participants`), newParticipants);
-  };
-
-  const saveAssignments = (newAssignments) => {
-    if (!sessionId) return;
-    set(ref(db, `sessions/${sessionId}/assignments`), newAssignments);
-  };
-
-  const saveReactions = (newReactions) => {
-    if (!sessionId) return;
-    set(ref(db, `sessions/${sessionId}/reactions`), newReactions);
-  };
-
-  const saveRevealState = useCallback(
-    (index, stage, messageShown = false) => {
+  const savePhase = useCallback(
+    (newPhase) => {
       if (!sessionId) return;
-      set(ref(db, `sessions/${sessionId}/reveal-state`), {
-        index,
-        stage,
-        showMessage: messageShown,
-      });
+      set(ref(db, `sessions/${sessionId}/phase`), newPhase);
+    },
+    [sessionId]
+  );
+
+  const saveParticipants = useCallback(
+    (newParticipants) => {
+      if (!sessionId) return;
+      set(ref(db, `sessions/${sessionId}/participants`), newParticipants);
+    },
+    [sessionId]
+  );
+
+  const saveAssignments = useCallback(
+    (newAssignments) => {
+      if (!sessionId) return;
+      set(ref(db, `sessions/${sessionId}/assignments`), newAssignments);
+    },
+    [sessionId]
+  );
+
+  const saveReactions = useCallback(
+    (newReactions) => {
+      if (!sessionId) return;
+      set(ref(db, `sessions/${sessionId}/reactions`), newReactions);
     },
     [sessionId]
   );
@@ -353,15 +400,15 @@ export default function SecretSanta() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   };
 
-  const createNewSession = () => {
+  const createNewSession = useCallback(() => {
     const newSessionId = generateSessionId();
     setSessionId(newSessionId);
     const url = new URL(window.location);
     url.searchParams.set("session", newSessionId);
     window.history.pushState({}, "", url);
-  };
+  }, []);
 
-  const joinSession = () => {
+  const joinSession = useCallback(() => {
     if (!sessionInput.trim() || sessionInput.length !== 6) {
       alert("Please enter a valid 6-character session code");
       return;
@@ -372,17 +419,16 @@ export default function SecretSanta() {
     url.searchParams.set("session", uppercaseSessionId);
     window.history.pushState({}, "", url);
     setSessionInput("");
-  };
+  }, [sessionInput]);
 
-  const copySessionLink = () => {
+  const copySessionLink = useCallback(() => {
     const url = `${window.location.origin}${window.location.pathname}?session=${sessionId}`;
     navigator.clipboard.writeText(url).then(() => {
       alert("Session link copied! Share it with your team.");
     });
-  };
+  }, [sessionId]);
 
-  // Add participant
-  const addParticipant = () => {
+  const addParticipant = useCallback(() => {
     if (!newParticipantName.trim()) return;
 
     const newParticipant = {
@@ -392,7 +438,14 @@ export default function SecretSanta() {
 
     saveParticipants([...participants, newParticipant]);
     setNewParticipantName("");
-  };
+  }, [newParticipantName, participants, saveParticipants]);
+
+  const removeParticipant = useCallback(
+    (participantId) => {
+      saveParticipants(participants.filter((p) => p.id !== participantId));
+    },
+    [participants, saveParticipants]
+  );
 
   const simpleHash = (str) => {
     let hash = 0;
@@ -403,8 +456,8 @@ export default function SecretSanta() {
     }
     return hash.toString();
   };
-  // Generate assignments
-  const generateAssignments = async () => {
+
+  const generateAssignments = useCallback(async () => {
     if (participants.length < 2) {
       window.alert("Need at least 2 participants");
       return;
@@ -421,32 +474,29 @@ export default function SecretSanta() {
       return;
     }
 
-    // Save admin code
     set(ref(db, `sessions/${sessionId}/admin-code`), simpleHash(adminCode));
-    // Shuffle reveal order
     const shuffled = [...derangement].sort(() => Math.random() - 0.5);
     saveAssignments(shuffled);
     savePhase("writing");
     setIsAdmin(true);
-  };
+    localStorage.setItem(`admin-${sessionId}`, "true");
+  }, [participants, adminCode, sessionId, saveAssignments, savePhase]);
 
-  const handleUserSelect = (userId) => {
+  const handleUserSelect = useCallback((userId) => {
     setSelectedUserId(userId);
     setPinInput("");
     setPinError("");
     setShowPinPrompt(true);
-  };
+  }, []);
 
-  const verifyPin = () => {
+  const verifyPin = useCallback(() => {
     const existingPin = userPins[selectedUserId];
 
     if (!existingPin) {
-      // First time - set new PIN
       if (pinInput.length < 4) {
         setPinError("PIN must be at least 4 characters");
         return;
       }
-      // Save new PIN
       set(
         ref(db, `sessions/${sessionId}/user-pins/${selectedUserId}`),
         pinInput
@@ -455,7 +505,6 @@ export default function SecretSanta() {
       setShowPinPrompt(false);
       setPinInput("");
     } else {
-      // Verify existing PIN
       if (pinInput === existingPin) {
         setCurrentUser(selectedUserId);
         setShowPinPrompt(false);
@@ -466,24 +515,25 @@ export default function SecretSanta() {
         setPinInput("");
       }
     }
-  };
+  }, [userPins, selectedUserId, pinInput, sessionId]);
 
-  // Save message
-  const saveMessage = (assignmentId, message) => {
-    const updated = assignments.map((a) =>
-      a.assignmentId === assignmentId
-        ? {
-            ...a,
-            message,
-            messageSubmitted: message.trim().length > 0,
-          }
-        : a
-    );
-    saveAssignments(updated);
-  };
+  const saveMessage = useCallback(
+    (assignmentId, message) => {
+      const updated = assignments.map((a) =>
+        a.assignmentId === assignmentId
+          ? {
+              ...a,
+              message,
+              messageSubmitted: message.trim().length > 0,
+            }
+          : a
+      );
+      saveAssignments(updated);
+    },
+    [assignments, saveAssignments]
+  );
 
-  // Start reveal
-  const startReveal = () => {
+  const startReveal = useCallback(() => {
     if (!isAdmin) {
       setShowAdminPrompt(true);
       return;
@@ -502,12 +552,23 @@ export default function SecretSanta() {
 
     savePhase("reveal");
     saveRevealState(0, "name", false);
-  };
+  }, [isAdmin, assignments, savePhase, saveRevealState]);
 
-  // Verify admin code
-  const verifyAdminCode = () => {
+  const verifyAdminCode = useCallback(() => {
+    // During setup phase, there's no admin code in database yet
+    // Just grant admin access - they'll set the code when generating assignments
+    if (phase === "setup") {
+      setIsAdmin(true);
+      localStorage.setItem(`admin-${sessionId}`, "true");
+      setShowAdminPrompt(false);
+      setAdminCodeInput("");
+      return;
+    }
+
+    // For other phases, verify against stored admin code
     if (simpleHash(adminCodeInput) === adminCode) {
       setIsAdmin(true);
+      localStorage.setItem(`admin-${sessionId}`, "true");
       setShowAdminPrompt(false);
       setAdminCodeInput("");
       if (phase === "writing") {
@@ -518,83 +579,108 @@ export default function SecretSanta() {
       window.alert("Incorrect admin code");
       setAdminCodeInput("");
     }
-  };
-  // Next message
-  const nextMessage = () => {
-    if (revealIndex < assignments.length - 1) {
-      saveRevealState(revealIndex + 1, "name", false);
-      setShowConfetti(false);
-    } else {
-      savePhase("finale");
-      setShowConfetti(true);
-    }
-  };
+  }, [adminCodeInput, adminCode, phase, savePhase, saveRevealState, sessionId]);
 
-  const previousMessage = () => {
-    if (revealIndex > 0) {
-      saveRevealState(revealIndex - 1, "author", true);
-      setShowConfetti(false);
-    }
-  };
+  const addReaction = useCallback(
+    (assignmentId, emoji) => {
+      const key = `${assignmentId}-${emoji}`;
+      const newReactions = { ...reactions };
 
-  // Reveal author
-  const revealAuthor = () => {
-    saveRevealState(revealIndex, "author", true);
-    setShowConfetti(true);
-    setTimeout(() => setShowConfetti(false), 3000);
-  };
+      if (!newReactions[key]) {
+        newReactions[key] = 0;
+      }
+      newReactions[key]++;
 
-  // Add reaction
-  const addReaction = (assignmentId, emoji) => {
-    const key = `${assignmentId}-${emoji}`;
-    const newReactions = { ...reactions };
+      saveReactions(newReactions);
+    },
+    [reactions, saveReactions]
+  );
 
-    if (!newReactions[key]) {
-      newReactions[key] = 0;
-    }
-    newReactions[key]++;
+  const getReactionCount = useCallback(
+    (assignmentId, emoji) => {
+      const key = `${assignmentId}-${emoji}`;
+      return reactions[key] || 0;
+    },
+    [reactions]
+  );
 
-    saveReactions(newReactions);
-  };
-
-  const getReactionCount = (assignmentId, emoji) => {
-    const key = `${assignmentId}-${emoji}`;
-    return reactions[key] || 0;
-  };
-
-  // 1. Fix the broken Reset All function
-  const resetAll = async () => {
+  const resetAll = useCallback(async () => {
     if (!sessionId) return;
-    if (!window.confirm('Reset everything? This cannot be undone.')) return;
-    
+    if (!window.confirm("Reset everything? This cannot be undone.")) return;
+
     try {
-      // FIX: Use the correct session path!
       await remove(ref(db, `sessions/${sessionId}`));
+      localStorage.removeItem(`admin-${sessionId}`);
       window.location.reload();
     } catch (error) {
-      console.error('Reset failed:', error);
+      console.error("Reset failed:", error);
     }
-  };
+  }, [sessionId]);
 
-  const returnToSetup = async () => {
-    if (!window.confirm('⚠️ Unlock to add people?\n\nThis will KEEP the current list of names, but it MUST re-shuffle the assignments to include the new people.\n\nAre you sure?')) {
+  const returnToSetup = useCallback(async () => {
+    if (
+      !window.confirm(
+        "⚠️ Unlock to add people?\n\nThis will KEEP the current list of names, but it MUST re-shuffle the assignments to include the new people.\n\nAre you sure?"
+      )
+    ) {
       return;
     }
-    
+
     try {
-      // Try atomic update
       const updates = {};
-      updates[`sessions/${sessionId}/phase`] = 'setup';
+      updates[`sessions/${sessionId}/phase`] = "setup";
       updates[`sessions/${sessionId}/assignments`] = null;
       await db.ref().update(updates);
     } catch (e) {
-      set(ref(db, `sessions/${sessionId}/phase`), 'setup');
+      set(ref(db, `sessions/${sessionId}/phase`), "setup");
       set(ref(db, `sessions/${sessionId}/assignments`), null);
     }
-  };
+  }, [sessionId]);
 
-  const currentAssignment = assignments[revealIndex];
-  const userAssignment = assignments.find((a) => a.santaId === currentUser);
+  const handleCancelPinPrompt = useCallback(() => {
+    setShowPinPrompt(false);
+    setPinInput("");
+    setPinError("");
+    setSelectedUserId(null);
+  }, []);
+
+  const handleCancelAdminPrompt = useCallback(() => {
+    setShowAdminPrompt(false);
+    setAdminCodeInput("");
+  }, []);
+
+  const handleDoneEditing = useCallback(() => {
+    setShowEditConfirmation(false);
+    setCurrentUser(null);
+  }, []);
+
+  const handleKeepEditing = useCallback(() => {
+    setShowEditConfirmation(false);
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="app-container">
+        {snowflakes.map((flake) => (
+          <Snowflake
+            key={flake.id}
+            delay={flake.delay}
+            duration={flake.duration}
+            left={flake.left}
+          />
+        ))}
+        <div className="content-wrapper" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column' }}>
+          <div className="header-ornaments" style={{ marginBottom: '1rem' }}>
+             <Gift className="text-yellow-300" size={48} style={{ color: "#fde047" }} />
+          </div>
+          <h2 className="christmas-font glow-text" style={{ fontSize: '2rem', color: '#fff' }}>
+            Loading North Pole Data...
+          </h2>
+          <Loader2 className="animate-spin" style={{ color: '#fff', marginTop: '1rem' }} size={32} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -607,21 +693,24 @@ export default function SecretSanta() {
         />
       ))}
 
-      <button
-        onClick={() => {
-          if (
-            window.confirm("Start fresh session? This will delete all data.")
-          ) {
-            remove(ref(db, `sessions/${sessionId}`)).then(() =>
-              window.location.reload()
-            );
-          }
-        }}
-        className="dev-reset-btn"
-        title="Reset all data and start fresh"
-      >
-        Dev Reset
-      </button>
+      {isAdmin && sessionId && (
+        <button
+          onClick={() => {
+            if (
+              window.confirm("Start fresh session? This will delete all data.")
+            ) {
+              localStorage.removeItem(`admin-${sessionId}`);
+              remove(ref(db, `sessions/${sessionId}`)).then(() =>
+                window.location.reload()
+              );
+            }
+          }}
+          className="dev-reset-btn"
+          title="Reset all data and start fresh"
+        >
+          Dev Reset
+        </button>
+      )}
 
       <div className="content-wrapper">
         {!sessionId && (
@@ -902,1124 +991,104 @@ export default function SecretSanta() {
             )}
 
             {phase === "setup" && (
-              <div className="card fade-in-up">
-                <h2
-                  className="christmas-font"
-                  style={{
-                    fontSize: "2rem",
-                    marginBottom: "2rem",
-                    color: "#0a4d3c",
-                  }}
-                >
-                  Add participants
-                </h2>
-
-                <div className="flex gap-3 mb-8">
-                  <input
-                    type="text"
-                    value={newParticipantName}
-                    onChange={(e) => setNewParticipantName(e.target.value)}
-                    onKeyPress={(e) => e.key === "Enter" && addParticipant()}
-                    placeholder="Enter name"
-                    className="input"
-                  />
-                  <button onClick={addParticipant} className="btn btn-primary">
-                    Add
-                  </button>
-                </div>
-
-                <div style={{ marginBottom: "2rem" }}>
-                  {participants.map((p) => (
-                    <div key={p.id} className="participant-item">
-                      <span className="participant-name">{p.name}</span>
-                      <button
-                        onClick={() =>
-                          saveParticipants(
-                            participants.filter((pp) => pp.id !== p.id)
-                          )
-                        }
-                        className="participant-remove"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ marginBottom: "2rem" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      marginBottom: "0.5rem",
-                      fontWeight: 600,
-                      color: "#0a4d3c",
-                    }}
-                  >
-                    Set Admin Code (required)
-                  </label>
-                  <input
-                    type="password"
-                    value={adminCode}
-                    onChange={(e) => setAdminCode(e.target.value)}
-                    placeholder="Create a secret code for admin"
-                    className="input"
-                    style={{ marginBottom: "0.5rem" }}
-                  />
-                  <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>
-                    Only people with this code can control the reveal
-                  </p>
-                </div>
-
-                <div className="flex gap-4">
-                  <button
-                    onClick={generateAssignments}
-                    disabled={participants.length < 2 || !adminCode.trim()}
-                    className="btn btn-primary"
-                    style={{ flex: 1 }}
-                  >
-                    🎄 Generate assignments
-                  </button>
-                  {participants.length > 0 && isAdmin && (
-                    <button onClick={resetAll} className="btn btn-secondary">
-                      Reset all
-                    </button>
-                  )}
-                </div>
-              </div>
+              <SetupPhase
+                newParticipantName={newParticipantName}
+                setNewParticipantName={setNewParticipantName}
+                onAddParticipant={addParticipant}
+                participants={participants}
+                onRemoveParticipant={removeParticipant}
+                adminCode={adminCode}
+                setAdminCode={setAdminCode}
+                onGenerateAssignments={generateAssignments}
+                isAdmin={isAdmin}
+                onResetAll={resetAll}
+                onBecomeAdmin={() => setShowAdminPrompt(true)}
+              />
             )}
 
             {phase === "writing" && (
-              <div>
-                {isAdmin && (
-                  <div
-                    className="card fade-in-up"
-                    style={{ marginBottom: "2rem" }}
-                  >
-                    <h2
-                      className="christmas-font"
-                      style={{
-                        fontSize: "2rem",
-                        marginBottom: "1.5rem",
-                        color: "#0a4d3c",
-                      }}
-                    >
-                      Writing Progress
-                    </h2>
-
-                    <div
-                      style={{
-                        padding: "1.5rem",
-                        background: "linear-gradient(135deg, #fef2f2, #f0fdf4)",
-                        borderRadius: "1rem",
-                        border: "3px solid #ffd700",
-                        marginBottom: "1.5rem",
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: "2.5rem",
-                          fontWeight: "bold",
-                          color: "#c41e3a",
-                          textAlign: "center",
-                          marginBottom: "0.5rem",
-                        }}
-                      >
-                        {assignments.filter((a) => a.messageSubmitted).length} /{" "}
-                        {assignments.length}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "1rem",
-                          color: "#6b7280",
-                          textAlign: "center",
-                          fontWeight: 600,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        Messages Written
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "0.75rem",
-                      }}
-                    >
-                      {assignments.map((assignment) => (
-                        <div
-                          key={assignment.assignmentId}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            padding: "1rem",
-                            background: assignment.messageSubmitted
-                              ? "linear-gradient(to right, #f0fdf4, #d1fae5)"
-                              : "linear-gradient(to right, #fef2f2, #fee2e2)",
-                            borderRadius: "0.75rem",
-                            border: assignment.messageSubmitted
-                              ? "2px solid #10b981"
-                              : "2px solid #ef4444",
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.75rem",
-                            }}
-                          >
-                            <span style={{ fontSize: "1.5rem" }}>
-                              {assignment.messageSubmitted ? "✅" : "⏳"}
-                            </span>
-                            <div>
-                              <span
-                                style={{
-                                  fontWeight: "bold",
-                                  color: "#0a4d3c",
-                                  fontSize: "1.125rem",
-                                }}
-                              >
-                                {assignment.santaName}
-                              </span>
-                              <span
-                                style={{ color: "#6b7280", fontSize: "1rem" }}
-                              >
-                                {" "}
-                                →{" "}
-                              </span>
-                              <span
-                                style={{
-                                  fontWeight: 600,
-                                  color: "#374151",
-                                  fontSize: "1rem",
-                                }}
-                              >
-                                {assignment.receiverName}
-                              </span>
-                            </div>
-                          </div>
-                          <span
-                            style={{
-                              fontSize: "0.875rem",
-                              fontWeight: 600,
-                              color: assignment.messageSubmitted
-                                ? "#059669"
-                                : "#dc2626",
-                            }}
-                          >
-                            {assignment.messageSubmitted
-                              ? "Submitted"
-                              : "Pending"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {assignments.filter((a) => !a.messageSubmitted).length >
-                      0 && (
-                      <div
-                        style={{
-                          marginTop: "1.5rem",
-                          padding: "1rem",
-                          background: "#fef3c7",
-                          borderRadius: "0.75rem",
-                          border: "2px solid #f59e0b",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.75rem",
-                        }}
-                      >
-                        <span style={{ fontSize: "1.5rem" }}>⚠️</span>
-                        <p
-                          style={{
-                            fontSize: "0.875rem",
-                            color: "#92400e",
-                            margin: 0,
-                            fontWeight: 600,
-                          }}
-                        >
-                          {
-                            assignments.filter((a) => !a.messageSubmitted)
-                              .length
-                          }{" "}
-                          person(s) haven't written yet. You can still start the
-                          reveal, but their recipients will see "(No message
-                          written)".
-                        </p>
-                      </div>
-                    )}
-                    <div style={{ marginTop: '1.5rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' }}>
-                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.75rem', textAlign: 'center' }}>
-                    Need to add more people or fix a typo?
-                  </p>
-                  <button 
-                    onClick={returnToSetup}
-                    className="btn btn-secondary"
-                    style={{ width: '100%', borderColor: '#f87171', color: '#dc2626' }}
-                  >
-                    ⚠️ Unlock & Edit Participants
-                  </button>
-                </div>
-                  </div>
-                )}
-
-                {!currentUser ? (
-                  <div className="card fade-in-up">
-                    <h2
-                      className="christmas-font"
-                      style={{
-                        fontSize: "2rem",
-                        marginBottom: "2rem",
-                        color: "#0a4d3c",
-                      }}
-                    >
-                      Select your name
-                    </h2>
-
-                    <div
-                      style={{
-                        marginBottom: "2rem",
-                        padding: "1rem",
-                        background: "#f9fafb",
-                        borderRadius: "1rem",
-                        border: "2px solid #e5e7eb",
-                      }}
-                    >
-                      <p
-                        style={{
-                          fontSize: "0.875rem",
-                          color: "#6b7280",
-                          marginBottom: "0.5rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        Participants ({participants.length}):
-                      </p>
-                      <p style={{ color: "#374151" }}>
-                        {participants.map((p) => p.name).join(", ")}
-                      </p>
-                    </div>
-
-                    <div>
-                      {participants.map((p) => {
-                        const userAssignment = assignments.find(
-                          (a) => a.santaId === p.id
-                        );
-                        const hasWritten = userAssignment?.messageSubmitted;
-
-                        return (
-                          <button
-                            key={p.id}
-                            onClick={() => handleUserSelect(p.id)}
-                            className="participant-btn"
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                width: "100%",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "0.75rem",
-                                }}
-                              >
-                                🎁 {p.name}
-                              </span>
-                              {hasWritten && (
-                                <span
-                                  style={{
-                                    fontSize: "1rem",
-                                    background: "white",
-                                    width: "32px",
-                                    height: "32px",
-                                    borderRadius: "50%",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  ✏️
-                                </span>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-8 pt-8 border-t">
-                      <button
-                        onClick={startReveal}
-                        className="btn btn-primary w-full"
-                      >
-                        {isAdmin
-                          ? "🎅 Start reveal"
-                          : "🎅 Start reveal (Admin code required)"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  userAssignment && (
-                    <div className="card scale-in">
-                      <h2
-                        className="christmas-font"
-                        style={{
-                          fontSize: "1.5rem",
-                          marginBottom: "1.5rem",
-                          color: "#0a4d3c",
-                        }}
-                      >
-                        {userAssignment.messageSubmitted
-                          ? "✏️ Edit Your Message"
-                          : "You've been paired with one teammate."}
-                      </h2>
-
-                      <div className="assignment-box">
-                        <p className="assignment-label">This message is for:</p>
-                        <p className="assignment-name christmas-font glow-text">
-                          {userAssignment.receiverName}
-                        </p>
-                      </div>
-
-                      <p
-                        style={{
-                          color: "#374151",
-                          marginBottom: "1.5rem",
-                          fontSize: "1.125rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        Write something kind, thoughtful, or lightly funny.
-                        <br />
-                        Keep it nice. Keep it human.
-                      </p>
-
-                      <div
-                        style={{
-                          padding: "0.75rem 1rem",
-                          background: "#fef3c7",
-                          borderRadius: "0.75rem",
-                          border: "2px solid #f59e0b",
-                          marginBottom: "1rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                        }}
-                      >
-                        <span style={{ fontSize: "1.25rem" }}>⏰</span>
-                        <p
-                          style={{
-                            fontSize: "0.875rem",
-                            color: "#92400e",
-                            margin: 0,
-                            fontWeight: 600,
-                          }}
-                        >
-                          Once the reveal starts, you won't be able to write or
-                          edit your message!
-                        </p>
-                      </div>
-
-                      <textarea
-                        value={userAssignment.message}
-                        onChange={(e) =>
-                          saveMessage(
-                            userAssignment.assignmentId,
-                            e.target.value
-                          )
-                        }
-                        placeholder="Your message..."
-                        className="textarea"
-                      />
-
-                      <div className="flex gap-4 mt-6">
-                        {userAssignment.message.trim() && (
-                          <>
-                            <button
-                              onClick={() => setShowPreview(true)}
-                              className="btn btn-secondary"
-                            >
-                              Preview
-                            </button>
-                            <button
-                              onClick={() => {
-                                setShowEditConfirmation(true);
-                              }}
-                              className="btn btn-primary"
-                            >
-                              {userAssignment.messageSubmitted
-                                ? "Update message"
-                                : "Save message"}
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => setCurrentUser(null)}
-                          className="btn btn-secondary"
-                        >
-                          Back
-                        </button>
-                      </div>
-                    </div>
-                  )
-                )}
-              </div>
+              <WritingPhase
+                isAdmin={isAdmin}
+                assignments={assignments}
+                participants={participants}
+                onReturnToSetup={returnToSetup}
+                currentUser={currentUser}
+                onUserSelect={handleUserSelect}
+                onStartReveal={startReveal}
+                userAssignment={userAssignment}
+                onSaveMessage={saveMessage}
+                onShowPreview={() => setShowPreview(true)}
+                onShowEditConfirmation={() => setShowEditConfirmation(true)}
+                onBack={() => setCurrentUser(null)}
+              />
             )}
 
-            {phase === "reveal" && currentAssignment && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "2rem",
-                }}
-              >
-                <div className="card scale-in">
-                  <div className="reveal-header fade-in-up">
-                    <h2 className="reveal-header-title christmas-font">
-                      A message written for
-                    </h2>
-                    <p className="reveal-header-name christmas-font glow-text">
-                      {currentAssignment.receiverName}
-                    </p>
-                  </div>
-
-                  {showMessage && (
-                    <div className="fade-in-up">
-                      <div className="message-box">
-                        <p className="message-text">
-                          {currentAssignment.message || getRandomFallback()}
-                          {!currentAssignment.message && (
-                            <span
-                              style={{
-                                display: "block",
-                                fontSize: "0.8rem",
-                                marginTop: "1rem",
-                                fontStyle: "italic",
-                                opacity: 0.7,
-                              }}
-                            >
-                              (The Secret Santa was too shy to write a message,
-                              so the elves wrote this one!)
-                            </span>
-                          )}
-                        </p>
-                      </div>
-
-                      {revealStage !== "author" && (
-                        <div className="reactions-container scale-in">
-                          <p className="reactions-prompt">
-                            React if this made you smile
-                          </p>
-                          <div className="reactions-grid">
-                            {REACTIONS.map(({ id, label }) => (
-                              <button
-                                key={id}
-                                onClick={() =>
-                                  addReaction(
-                                    currentAssignment.assignmentId,
-                                    id
-                                  )
-                                }
-                                className="reaction-btn"
-                                title={label}
-                              >
-                                <ReactionIcon type={id} />
-                                <span className="reaction-count">
-                                  {getReactionCount(
-                                    currentAssignment.assignmentId,
-                                    id
-                                  )}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {revealStage === "author" && (
-                        <div className="author-reveal scale-in">
-                          <div
-                            className="flex items-center"
-                            style={{
-                              justifyContent: "center",
-                              gap: "1rem",
-                              marginBottom: "1.5rem",
-                            }}
-                          >
-                            <span className="author-reveal-icon">🎉</span>
-                            <h3 className="author-reveal-title christmas-font glow-text">
-                              Written by:
-                              <br />
-                              {currentAssignment.santaName}
-                            </h3>
-                            <span className="author-reveal-icon">🎉</span>
-                          </div>
-
-                          <div className="reactions-container">
-                            <p className="reactions-prompt">Final reactions</p>
-                            <div className="reactions-grid">
-                              {REACTIONS.map(({ id, label }) => (
-                                <button
-                                  key={id}
-                                  onClick={() =>
-                                    addReaction(
-                                      currentAssignment.assignmentId,
-                                      id
-                                    )
-                                  }
-                                  className="reaction-btn"
-                                  title={label}
-                                >
-                                  <ReactionIcon type={id} />
-                                  <span className="reaction-count">
-                                    {getReactionCount(
-                                      currentAssignment.assignmentId,
-                                      id
-                                    )}
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {isAdmin && (
-                  <div className="card controls-card">
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "1rem",
-                        alignItems: "center",
-                      }}
-                    >
-                      <p
-                        style={{
-                          fontSize: "1.125rem",
-                          fontWeight: "bold",
-                          color: "#6b7280",
-                          textAlign: "center",
-                        }}
-                      >
-                        Message {revealIndex + 1} of {assignments.length}
-                      </p>
-
-                      {revealStage === "message" && (
-                        <button
-                          onClick={revealAuthor}
-                          className="btn btn-primary"
-                          style={{ fontSize: "1.25rem", minWidth: "220px" }}
-                        >
-                          🎅 Reveal author
-                        </button>
-                      )}
-
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "1rem",
-                          width: "100%",
-                          justifyContent: "center",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        {revealIndex > 0 && (
-                          <button
-                            onClick={previousMessage}
-                            className="btn btn-secondary"
-                            style={{ fontSize: "1.125rem", minWidth: "140px" }}
-                          >
-                            Previous
-                          </button>
-                        )}
-
-                        {revealStage === "author" &&
-                          revealIndex < assignments.length - 1 && (
-                            <button
-                              onClick={nextMessage}
-                              className="btn btn-primary"
-                              style={{
-                                fontSize: "1.125rem",
-                                minWidth: "140px",
-                              }}
-                            >
-                              Next
-                            </button>
-                          )}
-
-                        {revealIndex === assignments.length - 1 &&
-                          revealStage === "author" && (
-                            <button
-                              onClick={nextMessage}
-                              className="btn btn-primary"
-                              style={{ fontSize: "1.25rem", minWidth: "220px" }}
-                            >
-                              🎉 Continue to Finale
-                            </button>
-                          )}
-                      </div>
-
-                      <p
-                        style={{
-                          fontSize: "0.875rem",
-                          color: "#9ca3af",
-                          textAlign: "center",
-                          marginTop: "0.5rem",
-                        }}
-                      >
-                        💡 Use ← → arrow keys to navigate
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {!isAdmin && (
-                  <div className="card controls-card">
-                    <p
-                      style={{
-                        textAlign: "center",
-                        color: "#6b7280",
-                        fontSize: "1rem",
-                        marginBottom: "1rem",
-                      }}
-                    >
-                      Waiting for admin to control the reveal...
-                    </p>
-                    <button
-                      onClick={() => setShowAdminPrompt(true)}
-                      className="btn btn-secondary"
-                      style={{ margin: "0 auto", display: "block" }}
-                    >
-                      Enter admin code
-                    </button>
-                  </div>
-                )}
-              </div>
+            {phase === "reveal" && (
+              <RevealPhase
+                currentAssignment={currentAssignment}
+                showMessage={showMessage}
+                revealStage={revealStage}
+                getRandomFallback={getRandomFallback}
+                onAddReaction={addReaction}
+                getReactionCount={getReactionCount}
+                isAdmin={isAdmin}
+                revealIndex={revealIndex}
+                assignmentsLength={assignments.length}
+                onRevealAuthor={revealAuthor}
+                onPreviousMessage={previousMessage}
+                onNextMessage={nextMessage}
+                onShowAdminPrompt={() => setShowAdminPrompt(true)}
+              />
             )}
 
             {phase === "finale" && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "2rem",
-                }}
-              >
-                <div className="card finale-card scale-in">
-                  <div className="finale-celebration">
-                    <div className="finale-icon">🎊</div>
-                    <h1 className="finale-title christmas-font glow-text">
-                      What a Journey!
-                    </h1>
-                    <div className="finale-icon">🎊</div>
-                  </div>
-
-                  <p className="finale-message">
-                    Thank you for sharing kindness, gratitude, and appreciation
-                    with each other. These moments of connection make our team
-                    truly special.
-                  </p>
-
-                  <div className="finale-stats">
-                    <div className="finale-stat-item">
-                      <div className="finale-stat-number christmas-font">
-                        {assignments.length}
-                      </div>
-                      <div className="finale-stat-label">
-                        Heartfelt Messages
-                      </div>
-                    </div>
-                    <div className="finale-stat-divider">✨</div>
-                    <div className="finale-stat-item">
-                      <div className="finale-stat-number christmas-font">
-                        {Object.values(reactions).reduce(
-                          (sum, count) => sum + count,
-                          0
-                        )}
-                      </div>
-                      <div className="finale-stat-label">Reactions of Joy</div>
-                    </div>
-                    <div className="finale-stat-divider">✨</div>
-                    <div className="finale-stat-item">
-                      <div className="finale-stat-number christmas-font">
-                        {participants.length}
-                      </div>
-                      <div className="finale-stat-label">Amazing People</div>
-                    </div>
-                  </div>
-
-                  {/* Participants Grid */}
-                  <div className="finale-participants-section">
-                    <h3 className="finale-section-title christmas-font">
-                      Our Team 🎄
-                    </h3>
-                    <div className="finale-participants-grid">
-                      {participants.map((participant) => (
-                        <div
-                          key={participant.id}
-                          className="finale-participant-card"
-                        >
-                          <span className="finale-participant-emoji">🎁</span>
-                          <span className="finale-participant-name">
-                            {participant.name}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {isAdmin && (
-                    <div className="finale-actions">
-                      <button
-                        onClick={resetAll}
-                        className="btn btn-primary"
-                        style={{ fontSize: "1.25rem", marginTop: "1rem" }}
-                      >
-                        Start New Session
-                      </button>
-                    </div>
-                  )}
-
-                  {!isAdmin && (
-                    <div className="finale-actions">
-                      <p
-                        style={{
-                          color: "#6b7280",
-                          fontSize: "1rem",
-                          textAlign: "center",
-                        }}
-                      >
-                        Waiting for admin to start a new session...
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <FinalePhase
+                assignments={assignments}
+                reactions={reactions}
+                participants={participants}
+                isAdmin={isAdmin}
+                onResetAll={resetAll}
+              />
             )}
           </>
         )}
       </div>
 
-      {showAdminPrompt && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0, 0, 0, 0.7)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div className="card" style={{ maxWidth: "400px", padding: "2rem" }}>
-            <h3
-              className="christmas-font"
-              style={{
-                fontSize: "1.5rem",
-                marginBottom: "1rem",
-                color: "#0a4d3c",
-                textAlign: "center",
-              }}
-            >
-              Admin Access Required
-            </h3>
-            <p
-              style={{
-                marginBottom: "1.5rem",
-                color: "#374151",
-                textAlign: "center",
-              }}
-            >
-              Enter the admin code to start the reveal
-            </p>
-            <input
-              type="password"
-              value={adminCodeInput}
-              onChange={(e) => setAdminCodeInput(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && verifyAdminCode()}
-              placeholder="Enter admin code"
-              className="input"
-              style={{ marginBottom: "1rem" }}
-              autoFocus
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={verifyAdminCode}
-                className="btn btn-primary"
-                style={{ flex: 1 }}
-              >
-                Verify
-              </button>
-              <button
-                onClick={() => {
-                  setShowAdminPrompt(false);
-                  setAdminCodeInput("");
-                }}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AdminPromptModal
+        isOpen={showAdminPrompt}
+        adminCodeInput={adminCodeInput}
+        setAdminCodeInput={setAdminCodeInput}
+        onVerify={verifyAdminCode}
+        onCancel={handleCancelAdminPrompt}
+        isSetupPhase={phase === "setup"}
+      />
 
-      {showPinPrompt && selectedUserId && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0, 0, 0, 0.7)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div className="card" style={{ maxWidth: "400px", padding: "2rem" }}>
-            <h3
-              className="christmas-font"
-              style={{
-                fontSize: "1.5rem",
-                marginBottom: "1rem",
-                color: "#0a4d3c",
-                textAlign: "center",
-              }}
-            >
-              {!userPins[selectedUserId] ? "Create Your PIN" : "Enter Your PIN"}
-            </h3>
-            <p
-              style={{
-                marginBottom: "1.5rem",
-                color: "#374151",
-                textAlign: "center",
-              }}
-            >
-              {!userPins[selectedUserId]
-                ? "Set a PIN to protect your message (minimum 4 characters)"
-                : "Enter your PIN to access your message"}
-            </p>
-            <input
-              type="password"
-              value={pinInput}
-              onChange={(e) => {
-                setPinInput(e.target.value);
-                setPinError("");
-              }}
-              onKeyPress={(e) => e.key === "Enter" && verifyPin()}
-              placeholder={
-                !userPins[selectedUserId]
-                  ? "Create PIN (min 4 chars)"
-                  : "Enter PIN"
-              }
-              className="input"
-              style={{ marginBottom: "0.5rem" }}
-              autoFocus
-            />
-            {pinError && (
-              <p
-                style={{
-                  color: "#dc2626",
-                  fontSize: "0.875rem",
-                  marginBottom: "1rem",
-                  textAlign: "center",
-                }}
-              >
-                {pinError}
-              </p>
-            )}
-            <div className="flex gap-3" style={{ marginTop: "1rem" }}>
-              <button
-                onClick={verifyPin}
-                className="btn btn-primary"
-                style={{ flex: 1 }}
-              >
-                {!userPins[selectedUserId] ? "Set PIN" : "Verify"}
-              </button>
-              <button
-                onClick={() => {
-                  setShowPinPrompt(false);
-                  setPinInput("");
-                  setPinError("");
-                  setSelectedUserId(null);
-                }}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PinPromptModal
+        isOpen={showPinPrompt}
+        selectedUserId={selectedUserId}
+        userPins={userPins}
+        pinInput={pinInput}
+        setPinInput={setPinInput}
+        pinError={pinError}
+        setPinError={setPinError}
+        onVerify={verifyPin}
+        onCancel={handleCancelPinPrompt}
+      />
 
-      {showPreview && currentUser && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0, 0, 0, 0.7)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            padding: "1rem",
-          }}
-        >
-          <div
-            className="card"
-            style={{ maxWidth: "700px", width: "100%", padding: "2rem" }}
-          >
-            <h3
-              className="christmas-font"
-              style={{
-                fontSize: "2rem",
-                marginBottom: "1rem",
-                color: "#0a4d3c",
-                textAlign: "center",
-              }}
-            >
-              Preview
-            </h3>
-            <p
-              style={{
-                marginBottom: "1.5rem",
-                color: "#6b7280",
-                textAlign: "center",
-              }}
-            >
-              This is how your message will look during the reveal
-            </p>
+      <PreviewModal
+        isOpen={showPreview && currentUser}
+        receiverName={userAssignment?.receiverName}
+        message={userAssignment?.message}
+        getRandomFallback={getRandomFallback}
+        onClose={() => setShowPreview(false)}
+      />
 
-            <div
-              className="reveal-header fade-in-up"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2 className="reveal-header-title christmas-font">
-                A message written for
-              </h2>
-              <p className="reveal-header-name christmas-font glow-text">
-                {
-                  assignments.find((a) => a.santaId === currentUser)
-                    ?.receiverName
-                }
-              </p>
-            </div>
-
-            <div className="message-box">
-              <p className="message-text">
-                {userAssignment.message || getRandomFallback()}
-                {!userAssignment.message && (
-                  <span style={{ display: 'block', fontSize: '0.8rem', marginTop: '1rem', fontStyle: 'italic', opacity: 0.7 }}>
-                    (The Secret Santa was too shy to write a message, so the elves wrote this one!)
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <button
-              onClick={() => setShowPreview(false)}
-              className="btn btn-primary"
-              style={{ width: "100%", marginTop: "1.5rem" }}
-            >
-              Close Preview
-            </button>
-          </div>
-        </div>
-      )}
-
-      {showEditConfirmation && currentUser && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0, 0, 0, 0.7)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div className="card" style={{ maxWidth: "500px", padding: "2rem" }}>
-            <div style={{ textAlign: "center", marginBottom: "1.5rem" }}></div>
-            <h3
-              className="christmas-font"
-              style={{
-                fontSize: "2rem",
-                marginBottom: "1rem",
-                color: "#0a4d3c",
-                textAlign: "center",
-              }}
-            >
-              {assignments.find((a) => a.santaId === currentUser)
-                ?.messageSubmitted
-                ? "Message Updated!"
-                : "Message Saved!"}
-            </h3>
-            <p
-              style={{
-                marginBottom: "1.5rem",
-                color: "#374151",
-                textAlign: "center",
-                fontSize: "1.125rem",
-              }}
-            >
-              Your secret is safe. You can edit your message anytime before the
-              reveal starts.
-            </p>
-
-            <div
-              style={{ display: "flex", gap: "1rem", flexDirection: "column" }}
-            >
-              <button
-                onClick={() => {
-                  setShowEditConfirmation(false);
-                  setCurrentUser(null);
-                }}
-                className="btn btn-primary"
-                style={{ width: "100%" }}
-              >
-                Done
-              </button>
-              <button
-                onClick={() => setShowEditConfirmation(false)}
-                className="btn btn-secondary"
-                style={{ width: "100%" }}
-              >
-                Keep Editing
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <EditConfirmationModal
+        isOpen={showEditConfirmation && currentUser}
+        isUpdate={userAssignment?.messageSubmitted}
+        onDone={handleDoneEditing}
+        onKeepEditing={handleKeepEditing}
+      />
     </div>
   );
 }
